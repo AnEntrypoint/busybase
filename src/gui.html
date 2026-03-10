@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>BusyBase</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/rippleui@1.12.1/dist/css/styles.css"/>
+<script type="importmap">{"imports":{"webjsx":"https://cdn.jsdelivr.net/npm/webjsx@0.0.73/dist/index.js","webjsx/jsx-runtime":"https://cdn.jsdelivr.net/npm/webjsx@0.0.73/dist/jsx-runtime.js"}}</script>
+<style>
+  body{margin:0;font-family:system-ui,sans-serif}
+  .sidebar{width:220px;min-height:100vh;display:flex;flex-direction:column;border-right:1px solid var(--border)}
+  .main{flex:1;padding:1.5rem;overflow:auto}
+  .layout{display:flex;min-height:100vh}
+  .nav-item{padding:.5rem 1rem;cursor:pointer;border-radius:.375rem;margin:.1rem .5rem;font-size:.875rem}
+  .nav-item:hover{background:var(--btn-color-ghost-hover)}
+  .nav-item.active{background:var(--btn-color-solid);color:#fff}
+  .cell-edit{outline:none;background:transparent;width:100%;font-size:.85rem;padding:2px 4px}
+  pre{background:#1e1e2e;color:#cdd6f4;padding:1rem;border-radius:.5rem;overflow:auto;font-size:.8rem;max-height:300px}
+  .toast{position:fixed;bottom:1.5rem;right:1.5rem;z-index:999;display:flex;flex-direction:column;gap:.5rem}
+  .dimmed{opacity:.4;pointer-events:none}
+  th,td{white-space:nowrap}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+import { applyDiff, createElement as h, Fragment } from "webjsx";
+
+// ── state ──────────────────────────────────────────────────────────────────
+const S = {
+  tab: "data",        // data | auth | api | logs
+  tables: [],
+  activeTable: null,
+  rows: [],
+  schema: [],
+  users: [],
+  toasts: [],
+  loading: false,
+  sql: "",
+  sqlResult: null,
+  logs: [],
+  editCell: null,     // {row,col}
+  newRow: {},
+  filter: "",
+  session: null,
+  loginEmail: "", loginPass: "", loginError: "",
+};
+
+const BASE = location.origin;
+
+// ── helpers ────────────────────────────────────────────────────────────────
+const api = async (path, opts = {}) => {
+  const headers = { "Content-Type": "application/json", apikey: "local", ...(S.session ? { Authorization: `Bearer ${S.session.access_token}` } : {}) };
+  try {
+    const r = await fetch(BASE + path, { ...opts, headers: { ...headers, ...opts.headers } });
+    const j = await r.json();
+    log(`${opts.method || "GET"} ${path}`, j);
+    return j;
+  } catch(e) { log("ERROR", e.message); return { error: { message: e.message } }; }
+};
+
+const toast = (msg, type = "info") => {
+  const id = Date.now();
+  S.toasts.push({ id, msg, type });
+  render();
+  setTimeout(() => { S.toasts = S.toasts.filter(t => t.id !== id); render(); }, 3000);
+};
+
+const log = (label, data) => {
+  S.logs.unshift({ ts: new Date().toLocaleTimeString(), label, data: JSON.stringify(data, null, 2) });
+  if (S.logs.length > 50) S.logs.pop();
+};
+
+const load = async (table) => {
+  S.activeTable = table; S.loading = true; render();
+  const r = await api(`/rest/v1/${table}?count=exact`);
+  S.rows = r.data || [];
+  S.schema = S.rows.length ? Object.keys(S.rows[0]) : [];
+  S.loading = false; render();
+};
+
+const loadTables = async () => {
+  // BusyBase doesn't have a /tables endpoint — infer from REST by querying known tables
+  // We persist table list in localStorage
+  const stored = localStorage.getItem("_bb_gui_tables");
+  S.tables = stored ? JSON.parse(stored) : [];
+  render();
+};
+
+const saveTables = () => localStorage.setItem("_bb_gui_tables", JSON.stringify(S.tables));
+
+const addTable = async (name) => {
+  if (!name || S.tables.includes(name)) return;
+  S.tables.push(name); saveTables();
+  await load(name);
+};
+
+const removeTable = (name) => {
+  S.tables = S.tables.filter(t => t !== name);
+  if (S.activeTable === name) { S.activeTable = S.tables[0] || null; S.rows = []; S.schema = []; }
+  saveTables(); render();
+};
+
+// ── login ──────────────────────────────────────────────────────────────────
+const tryLogin = async () => {
+  const r = await api("/auth/v1/token", { method: "POST", body: JSON.stringify({ email: S.loginEmail, password: S.loginPass }) });
+  if (r.error) { S.loginError = r.error.message; render(); return; }
+  S.session = r.data?.session || r;
+  S.loginError = ""; render();
+};
+
+const tryKeypairLogin = async () => {
+  // generate keypair & sign nonce
+  const kpRaw = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const [pub, priv] = await Promise.all([
+    crypto.subtle.exportKey("raw", kpRaw.publicKey),
+    crypto.subtle.exportKey("pkcs8", kpRaw.privateKey),
+  ]);
+  const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const pubkey = b64(pub), privkey = b64(priv);
+  localStorage.setItem("_bb_pubkey", pubkey); localStorage.setItem("_bb_privkey", privkey);
+  const nr = await api("/auth/v1/keypair");
+  const nonce = nr.data?.nonce;
+  const sig = b64(await crypto.subtle.sign("Ed25519", kpRaw.privateKey, new TextEncoder().encode(nonce)));
+  const r = await api("/auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature: sig }) });
+  if (r.error) { S.loginError = r.error.message; render(); return; }
+  S.session = r.data?.session || r; S.loginError = ""; render();
+};
+
+const tryRestoreKeypair = async () => {
+  const pubkey = localStorage.getItem("_bb_pubkey"), privkey = localStorage.getItem("_bb_privkey");
+  if (!pubkey || !privkey) return false;
+  const nr = await api("/auth/v1/keypair");
+  const nonce = nr.data?.nonce;
+  const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const privCrypto = await crypto.subtle.importKey("pkcs8", unb64(privkey), { name: "Ed25519" }, false, ["sign"]);
+  const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const sig = b64(await crypto.subtle.sign("Ed25519", privCrypto, new TextEncoder().encode(nonce)));
+  const r = await api("/auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature: sig }) });
+  if (r.data?.session) { S.session = r.data.session; render(); return true; }
+  return false;
+};
+
+// auto-restore keypair on load
+tryRestoreKeypair().then(ok => { if (!ok) render(); else loadTables(); });
+
+// ── data tab ───────────────────────────────────────────────────────────────
+const DataTab = () => {
+  const cols = S.schema.filter(c => c !== "vector");
+  const filtered = S.filter
+    ? S.rows.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(S.filter.toLowerCase())))
+    : S.rows;
+
+  const insertRow = async () => {
+    if (!S.activeTable || !Object.keys(S.newRow).length) return;
+    const r = await api(`/rest/v1/${S.activeTable}`, { method: "POST", body: JSON.stringify(S.newRow) });
+    if (r.error) { toast(r.error.message, "error"); return; }
+    S.newRow = {}; toast("Inserted"); await load(S.activeTable);
+  };
+
+  const deleteRow = async (row) => {
+    await api(`/rest/v1/${S.activeTable}?eq.id=${row.id}`, { method: "DELETE" });
+    toast("Deleted"); await load(S.activeTable);
+  };
+
+  const saveCell = async (row, col, val) => {
+    await api(`/rest/v1/${S.activeTable}?eq.id=${row.id}`, { method: "PATCH", body: JSON.stringify({ [col]: val }) });
+    S.editCell = null; toast("Saved"); await load(S.activeTable);
+  };
+
+  return h("div", { class: "flex gap-4 h-full" },
+    // Sidebar: table list
+    h("div", { class: "w-48 flex-shrink-0" },
+      h("div", { class: "flex gap-2 mb-3" },
+        h("input", { class: "input input-sm flex-1", placeholder: "table name", id: "new-tbl-input",
+          onkeydown: e => e.key === "Enter" && (addTable(e.target.value), e.target.value = "") }),
+        h("button", { class: "btn btn-sm btn-primary", onclick: () => { const el = document.getElementById("new-tbl-input"); addTable(el.value); el.value = ""; } }, "+"),
+      ),
+      S.tables.map(t => h("div", { class: `nav-item flex justify-between items-center ${t === S.activeTable ? "active" : ""}`,
+          onclick: () => load(t) },
+        h("span", null, t),
+        h("span", { class: "text-xs opacity-50 hover:opacity-100", onclick: e => { e.stopPropagation(); removeTable(t); } }, "✕")
+      ))
+    ),
+    // Main: table view
+    h("div", { class: "flex-1 overflow-auto" },
+      !S.activeTable
+        ? h("div", { class: "text-content2 mt-8 text-center" }, "Add a table name to get started")
+        : h(Fragment, null,
+            // Toolbar
+            h("div", { class: "flex gap-2 mb-3 items-center" },
+              h("input", { class: "input input-sm", placeholder: "filter...", value: S.filter,
+                oninput: e => { S.filter = e.target.value; render(); } }),
+              h("button", { class: "btn btn-sm btn-ghost", onclick: () => load(S.activeTable) }, "↻"),
+              h("span", { class: "text-sm text-content2" }, `${filtered.length} rows`),
+            ),
+            // Table
+            S.loading
+              ? h("div", { class: "flex justify-center p-8" }, h("span", { class: "loading" }))
+              : h("div", { class: "overflow-x-auto" },
+                  h("table", { class: "table table-hover table-compact" },
+                    h("thead", null, h("tr", null,
+                      ...cols.map(c => h("th", null, c)),
+                      h("th", null, "")
+                    )),
+                    h("tbody", null,
+                      // New row input
+                      h("tr", { class: "bg-base-200" },
+                        ...cols.map(c => h("td", null,
+                          h("input", { class: "cell-edit input input-xs", placeholder: c, value: S.newRow[c] || "",
+                            oninput: e => { S.newRow[c] = e.target.value; } })
+                        )),
+                        h("td", null, h("button", { class: "btn btn-xs btn-success", onclick: insertRow }, "＋"))
+                      ),
+                      ...filtered.map(row => h("tr", null,
+                        ...cols.map(col => {
+                          const editing = S.editCell?.row === row.id && S.editCell?.col === col;
+                          return h("td", { ondblclick: () => { S.editCell = { row: row.id, col }; render(); } },
+                            editing
+                              ? h("input", { class: "cell-edit", "data-autofit": "1", value: row[col] ?? "",
+                                  onblur: e => saveCell(row, col, e.target.value),
+                                  onkeydown: e => e.key === "Enter" && saveCell(row, col, e.target.value),
+                                  ref: el => el?.focus() })
+                              : h("span", { class: "text-sm" }, String(row[col] ?? ""))
+                          );
+                        }),
+                        h("td", null, h("button", { class: "btn btn-xs btn-error btn-ghost", onclick: () => deleteRow(row) }, "✕"))
+                      ))
+                    )
+                  )
+                )
+          )
+    )
+  );
+};
+
+// ── auth tab ───────────────────────────────────────────────────────────────
+const AuthTab = () => {
+  const exportKey = () => {
+    const pk = localStorage.getItem("_bb_privkey"), pub = localStorage.getItem("_bb_pubkey");
+    if (!pk) { toast("No keypair found", "warning"); return; }
+    navigator.clipboard?.writeText(JSON.stringify({ privkey: pk, pubkey: pub }));
+    toast("Keypair copied to clipboard");
+  };
+
+  const importKey = async () => {
+    const raw = prompt("Paste keypair JSON:");
+    if (!raw) return;
+    try {
+      const { privkey, pubkey } = JSON.parse(raw);
+      localStorage.setItem("_bb_privkey", privkey); localStorage.setItem("_bb_pubkey", pubkey);
+      await tryRestoreKeypair(); toast("Keypair restored");
+    } catch { toast("Invalid keypair", "error"); }
+  };
+
+  return h("div", { class: "max-w-lg" },
+    S.session
+      ? h("div", { class: "flex flex-col gap-4" },
+          h("div", { class: "alert alert-success" }, "Signed in as: " + (S.session.user?.email || S.session.user?.id || "anonymous")),
+          h("div", { class: "card" },
+            h("div", { class: "card-body gap-3" },
+              h("h2", { class: "card-header" }, "Session"),
+              h("pre", null, JSON.stringify(S.session.user, null, 2)),
+              h("div", { class: "flex gap-2" },
+                h("button", { class: "btn btn-sm btn-outline-primary", onclick: exportKey }, "📋 Export keypair"),
+                h("button", { class: "btn btn-sm btn-ghost", onclick: importKey }, "🔑 Import keypair"),
+                h("button", { class: "btn btn-sm btn-error btn-ghost ml-auto", onclick: async () => {
+                  await api("/auth/v1/logout", { method: "POST" });
+                  S.session = null; render();
+                }}, "Sign out"),
+              )
+            )
+          )
+        )
+      : h("div", { class: "flex flex-col gap-4" },
+          // Keypair (default / anonymous)
+          h("div", { class: "card" },
+            h("div", { class: "card-body gap-3" },
+              h("h2", { class: "card-header" }, "Anonymous (keypair)"),
+              h("p", { class: "text-content2 text-sm" }, "No signup required. Your keypair is your identity."),
+              h("div", { class: "flex gap-2" },
+                h("button", { class: "btn btn-primary", onclick: async () => { await tryKeypairLogin(); loadTables(); } }, "Sign in anonymously"),
+                h("button", { class: "btn btn-ghost", onclick: importKey }, "Restore from key"),
+              )
+            )
+          ),
+          // Email/password
+          h("div", { class: "card" },
+            h("div", { class: "card-body gap-3" },
+              h("h2", { class: "card-header" }, "Email / Password"),
+              S.loginError && h("div", { class: "alert alert-error text-sm" }, S.loginError),
+              h("input", { class: "input", placeholder: "email", type: "email", value: S.loginEmail,
+                oninput: e => { S.loginEmail = e.target.value; } }),
+              h("input", { class: "input", placeholder: "password", type: "password", value: S.loginPass,
+                oninput: e => { S.loginPass = e.target.value; },
+                onkeydown: e => e.key === "Enter" && tryLogin() }),
+              h("div", { class: "flex gap-2" },
+                h("button", { class: "btn btn-primary", onclick: tryLogin }, "Sign in"),
+                h("button", { class: "btn btn-ghost", onclick: async () => {
+                  const r = await api("/auth/v1/signup", { method: "POST", body: JSON.stringify({ email: S.loginEmail, password: S.loginPass }) });
+                  if (r.error) { S.loginError = r.error.message; render(); } else { toast("Account created — sign in"); }
+                }}, "Sign up"),
+              )
+            )
+          )
+        )
+  );
+};
+
+// ── api explorer tab ───────────────────────────────────────────────────────
+const ApiTab = () => {
+  const examples = [
+    ["GET all rows", () => S.activeTable ? `GET /rest/v1/${S.activeTable}` : "GET /rest/v1/mytable"],
+    ["Filter eq",   () => `GET /rest/v1/${S.activeTable || "mytable"}?eq.id=1`],
+    ["Insert",      () => `POST /rest/v1/${S.activeTable || "mytable"}\n${JSON.stringify({ name: "Alice", score: 10 }, null, 2)}`],
+    ["Update",      () => `PATCH /rest/v1/${S.activeTable || "mytable"}?eq.id=1\n${JSON.stringify({ name: "Bob" }, null, 2)}`],
+    ["Delete",      () => `DELETE /rest/v1/${S.activeTable || "mytable"}?eq.id=1`],
+    ["Sign up",     () => `POST /auth/v1/signup\n${JSON.stringify({ email: "user@example.com", password: "secret" }, null, 2)}`],
+    ["Sign in",     () => `POST /auth/v1/token\n${JSON.stringify({ email: "user@example.com", password: "secret" }, null, 2)}`],
+    ["Get user",    () => `GET /auth/v1/user`],
+    ["Keypair nonce", () => `GET /auth/v1/keypair`],
+    ["Vector search", () => `GET /rest/v1/${S.activeTable || "embeddings"}?vec=[1,0,0,0]&limit=5`],
+  ];
+
+  const run = async () => {
+    const lines = S.sql.trim().split("\n");
+    const [method, path] = lines[0].split(" ");
+    const body = lines.slice(1).join("\n").trim();
+    const opts = { method };
+    if (body) { try { opts.body = JSON.stringify(JSON.parse(body)); } catch { opts.body = body; } }
+    const r = await api(path, opts);
+    S.sqlResult = r; render();
+  };
+
+  return h("div", { class: "flex flex-col gap-4 max-w-2xl" },
+    h("div", { class: "flex flex-wrap gap-2" },
+      ...examples.map(([label, fn]) => h("button", { class: "btn btn-sm btn-ghost btn-outline-secondary",
+        onclick: () => { S.sql = fn(); S.sqlResult = null; render(); } }, label))
+    ),
+    h("textarea", { class: "textarea font-mono text-sm h-32", placeholder: "METHOD /path\n{body json}", value: S.sql,
+      oninput: e => { S.sql = e.target.value; } }),
+    h("button", { class: "btn btn-primary w-fit", onclick: run }, "Run ▶"),
+    S.sqlResult && h("pre", null, JSON.stringify(S.sqlResult, null, 2))
+  );
+};
+
+// ── logs tab ───────────────────────────────────────────────────────────────
+const LogsTab = () =>
+  h("div", { class: "flex flex-col gap-2" },
+    h("div", { class: "flex gap-2 mb-2" },
+      h("button", { class: "btn btn-sm btn-ghost", onclick: () => { S.logs = []; render(); } }, "Clear")
+    ),
+    ...S.logs.map(l => h("div", { class: "card card-border" },
+      h("div", { class: "card-body py-2 gap-1" },
+        h("div", { class: "flex gap-3 items-center" },
+          h("span", { class: "badge badge-flat-primary badge-sm" }, l.ts),
+          h("span", { class: "font-medium text-sm" }, l.label),
+        ),
+        h("pre", { class: "text-xs !p-2 !max-h-40" }, l.data)
+      )
+    ))
+  );
+
+// ── shell ──────────────────────────────────────────────────────────────────
+const App = () => h("div", { class: "layout" },
+  // Sidebar
+  h("aside", { class: "sidebar" },
+    h("div", { class: "sidebar-title p-4 font-bold text-lg flex items-center gap-2" },
+      h("span", null, "🚀"), h("span", null, "BusyBase")
+    ),
+    h("div", { class: "sidebar-content flex flex-col gap-1 pt-2" },
+      ["data", "auth", "api", "logs"].map(t =>
+        h("div", { class: `nav-item ${S.tab === t ? "active" : ""}`,
+          onclick: () => { S.tab = t; render(); } },
+          { data: "📋 Data", auth: "👤 Auth", api: "⚡ API Explorer", logs: "📜 Logs" }[t]
+        )
+      )
+    ),
+    S.session && h("div", { class: "sidebar-footer p-3" },
+      h("div", { class: "badge badge-flat-success badge-sm truncate max-w-full" },
+        S.session.user?.email || "anonymous")
+    )
+  ),
+  // Main
+  h("main", { class: "main" },
+    { data: DataTab, auth: AuthTab, api: ApiTab, logs: LogsTab }[S.tab]?.()
+  ),
+  // Toasts
+  h("div", { class: "toast" },
+    ...S.toasts.map(t => h("div", { class: `alert alert-${t.type === "error" ? "error" : t.type === "warning" ? "warning" : "info"}` }, t.msg))
+  )
+);
+
+const render = () => applyDiff(document.getElementById("app"), h(App, null));
+render();
+</script>
+</body>
+</html>
