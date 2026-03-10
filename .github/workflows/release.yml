@@ -34,7 +34,7 @@ jobs:
       - run: bun install
 
       - name: Build standalone
-        run: bun build src/server.ts --compile --target=${{ matrix.target }} --outfile=${{ matrix.artifact }}
+        run: bun build src/cli.ts --compile --target=${{ matrix.target }} --outfile=${{ matrix.artifact }}
 
       - uses: actions/upload-artifact@v4
         with:
