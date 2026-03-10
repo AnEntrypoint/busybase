@@ -1,4 +1,5 @@
 import { connect, type Table } from "vectordb";
+import { fireHook, pipeHook, sendEmail, hooks } from "./hooks.ts";
 
 const DIR = process.env.BUSYBASE_DIR || "busybase_data";
 const PORT = process.env.BUSYBASE_PORT || 54321;
@@ -28,6 +29,8 @@ if (!(await openTbl("_sessions")))
   await mkTbl("_sessions", [{ token: SENTINEL, refresh: SENTINEL, uid: "", exp: 0, vector: Z }]);
 // Nonces for keypair challenge (short-lived, in-memory is fine)
 const nonces = new Map<string, number>(); // nonce -> expiry ms
+// Password reset tokens: token -> { uid, exp }
+const resetTokens = new Map<string, { uid: string; exp: number }>();
 
 const real = (col = "id") => `${col} != '${SENTINEL}'`;
 const execFilter = async (t: Table, filter: string): Promise<any[]> => {
@@ -146,6 +149,9 @@ const importPubKey = (b64: string) =>
 Bun.serve({ port: PORT, fetch: async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
+  // --- onRequest middleware ---
+  if (hooks.onRequest) { const r = await hooks.onRequest(req); if (r) return r; }
+
   const { pathname, searchParams } = new URL(req.url);
   const P = Object.fromEntries(searchParams);
   const B = await req.json().catch(() => ({}));
@@ -190,6 +196,8 @@ Bun.serve({ port: PORT, fetch: async (req) => {
         // New anonymous user — create instantly, no email/password needed
         u = { id: crypto.randomUUID(), email: "", pw: "", pubkey, role: "authenticated", meta: "{}", app_meta: "{}", created: now, updated: now, last_sign_in: now, vector: Z };
         await ut.add([u]);
+        const hookErr = await fireHook("onSignup", makeUser(u));
+        if (hookErr) return err(hookErr, 400);
       } else {
         // Update last_sign_in
         await ut.delete(`id = '${u.id}'`);
@@ -199,6 +207,7 @@ Bun.serve({ port: PORT, fetch: async (req) => {
 
       const { token, refresh, exp: sExp } = await issueSession(u.id);
       const user = makeUser(u);
+      await fireHook("onSignin", user);
       return ok({ user, session: makeSession(token, refresh, sExp, user) });
     }
 
@@ -211,6 +220,8 @@ Bun.serve({ port: PORT, fetch: async (req) => {
       const now = new Date().toISOString();
       const u = { id: crypto.randomUUID(), email: emailLower, pw: await Bun.password.hash(B.password), pubkey: "", role: "authenticated", meta: JSON.stringify(B.data || {}), app_meta: "{}", created: now, updated: now, last_sign_in: now, vector: Z };
       await (await openTbl("_users"))!.add([u]);
+      const signupHookErr = await fireHook("onSignup", makeUser(u));
+      if (signupHookErr) return err(signupHookErr, 400);
       return ok({ user: makeUser(u), session: null });
     }
 
@@ -226,6 +237,7 @@ Bun.serve({ port: PORT, fetch: async (req) => {
       await ut.add([{ ...u, last_sign_in: now, updated: now }]);
       const { token, refresh, exp } = await issueSession(u.id);
       const user = makeUser({ ...u, last_sign_in: now, updated: now });
+      await fireHook("onSignin", user);
       return ok({ user, session: makeSession(token, refresh, exp, user) });
     }
 
@@ -250,9 +262,14 @@ Bun.serve({ port: PORT, fetch: async (req) => {
       const ut = (await openTbl("_users"))!;
       await ut.delete(`id = '${u.id}'`);
       const now = new Date().toISOString();
+      const newEmail = B.email ? B.email.toLowerCase() : u.email;
+      if (B.email && newEmail !== u.email) {
+        const emailHookErr = await fireHook("onEmailChange", makeUser(u), newEmail);
+        if (emailHookErr) return err(emailHookErr, 400);
+      }
       const merged = {
         ...u,
-        email: B.email ? B.email.toLowerCase() : u.email,
+        email: newEmail,
         pw: B.password ? await Bun.password.hash(B.password) : u.pw,
         meta: JSON.stringify({ ...JSON.parse(u.meta || "{}"), ...(B.data || {}) }),
         app_meta: JSON.stringify({ ...JSON.parse(u.app_meta || "{}"), ...(B.app_metadata || {}) }),
@@ -261,12 +278,61 @@ Bun.serve({ port: PORT, fetch: async (req) => {
       await ut.add([merged]);
       return ok({ user: makeUser(merged) });
     }
+
+    // --- Password reset request ---
+    if (action === "recover") {
+      const email = (B.email || "").toLowerCase();
+      if (!email) return err("Email required");
+      const users = await getRows("_users", `email = '${email.replace(/'/g, "''")}'`);
+      // Always return ok (don't leak whether email exists)
+      if (users[0]) {
+        const resetToken = crypto.randomUUID();
+        resetTokens.set(resetToken, { uid: users[0].id, exp: Date.now() + 60 * 60_000 }); // 1h
+        await fireHook("onPasswordReset", email, resetToken);
+        // Always send email unless hook handled it (sendEmail falls back to SMTP or logs)
+        if (!hooks.onPasswordReset) {
+          const siteUrl = process.env.BUSYBASE_URL || `http://localhost:${PORT}`;
+          await sendEmail(email, "Reset your password",
+            `<p>Click <a href="${siteUrl}/auth/v1/verify?token=${resetToken}&type=recovery">here</a> to reset your password. This link expires in 1 hour.</p>`);
+        }
+      }
+      return ok({});
+    }
+
+    // --- Verify reset token / OTP ---
+    if (action === "verify") {
+      const { token, type, password } = B.token ? B : { token: new URL(req.url).searchParams.get("token"), type: new URL(req.url).searchParams.get("type"), password: B.password };
+      if (type === "recovery" && token) {
+        const entry = resetTokens.get(token);
+        if (!entry || entry.exp < Date.now()) return err("Invalid or expired token", 401);
+        if (!password) return err("New password required");
+        resetTokens.delete(token);
+        const ut = (await openTbl("_users"))!;
+        const users = await getRows("_users", `id = '${entry.uid}'`);
+        const u = users[0];
+        if (!u) return err("User not found", 404);
+        const now = new Date().toISOString();
+        await ut.delete(`id = '${u.id}'`);
+        await ut.add([{ ...u, pw: await Bun.password.hash(password), updated: now }]);
+        const { token: access, refresh, exp } = await issueSession(u.id);
+        const user = makeUser({ ...u, updated: now });
+        return ok({ user, session: makeSession(access, refresh, exp, user) });
+      }
+      return err("Invalid verification type", 400);
+    }
   }
 
   if (pathname.startsWith("/rest/v1/")) {
     const table = pathname.slice(9).split("/").map(decodeURIComponent).filter(Boolean)[0];
     if (!table) return err("Table required");
     if (!validId(table)) return err("Invalid table name");
+
+    // canAccess hook — pass current user (or null for anon) + table + method
+    if (hooks.canAccess) {
+      const reqUser = await getUser(req).catch(() => null);
+      const denied = await fireHook("canAccess", { user: reqUser, table, method: req.method });
+      if (denied) return err(denied, 403);
+    }
 
     if (req.method === "GET") {
       if (P.vec) {
@@ -280,8 +346,10 @@ Bun.serve({ port: PORT, fetch: async (req) => {
           return ok(clean(await q.execute() as any[]));
         } catch { return err("Invalid vector", 400); }
       }
-      const filter = toFilter(P);
+      const paramsHooked = await pipeHook("beforeSelect", P, table);
+      const filter = toFilter(paramsHooked);
       let rows = filter ? await getRows(table, filter) : await getAllRows(table);
+      rows = await pipeHook("afterSelect", rows, table);
       if (P.select && P.select !== "*") {
         const cols = P.select.split(",").filter(c => validId(c));
         rows = rows.map(r => Object.fromEntries(cols.map(c => [c, r[c]])));
@@ -303,15 +371,17 @@ Bun.serve({ port: PORT, fetch: async (req) => {
     }
 
     if (req.method === "POST") {
-      const rows = Array.isArray(B) ? B : [B];
+      let rows = Array.isArray(B) ? B : [B];
       if (!rows.length || !Object.keys(rows[0]).length) return err("Empty body");
       if (Object.keys(rows[0]).some(k => k !== "vector" && !validId(k))) return err("Invalid column name");
-      const prepared = rows.map(r => ({ id: r.id ?? crypto.randomUUID(), ...r, vector: r.vector ?? Z }));
+      const preErr = await fireHook("beforeInsert", table, rows);
+      if (preErr) return err(preErr, 400);
+      rows = await pipeHook("afterInsert", rows.map(r => ({ id: r.id ?? crypto.randomUUID(), ...r, vector: r.vector ?? Z })), table);
       let t = await openTbl(table);
-      if (!t) t = await mkTbl(table, prepared);
-      else await t.add(prepared);
+      if (!t) t = await mkTbl(table, rows);
+      else await t.add(rows);
       if (returnMinimal) return new Response(null, { status: 204, headers: cors });
-      return ok(clean(prepared), 201);
+      return ok(clean(rows), 201);
     }
 
     if (req.method === "PUT" || req.method === "PATCH") {
@@ -320,10 +390,13 @@ Bun.serve({ port: PORT, fetch: async (req) => {
       const t = await openTbl(table);
       if (!t) return err("Table not found", 404);
       const data = Array.isArray(B) ? B[0] : B;
-      const existing = await getRows(table, filter);
+      let existing = await getRows(table, filter);
       if (!existing.length) return ok([]);
+      const preErr = await fireHook("beforeUpdate", table, existing, data);
+      if (preErr) return err(preErr, 400);
       await t.delete(`(${real()}) AND (${filter})`);
-      const updated = existing.map(r => ({ ...r, ...data, vector: r.vector ?? Z }));
+      let updated = existing.map(r => ({ ...r, ...data, vector: r.vector ?? Z }));
+      updated = await pipeHook("afterUpdate", updated, table);
       await t.add(updated);
       if (returnMinimal) return new Response(null, { status: 204, headers: cors });
       return ok(clean(updated));
@@ -334,7 +407,11 @@ Bun.serve({ port: PORT, fetch: async (req) => {
       if (!filter) return err("No filter provided");
       const t = await openTbl(table);
       if (!t) return err("Table not found", 404);
+      const toDelete = await getRows(table, filter);
+      const preErr = await fireHook("beforeDelete", table, toDelete);
+      if (preErr) return err(preErr, 400);
       await t.delete(`(${real()}) AND (${filter})`);
+      await fireHook("afterDelete", table, toDelete);
       if (returnMinimal) return new Response(null, { status: 204, headers: cors });
       return ok([]);
     }
