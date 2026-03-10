@@ -9,20 +9,22 @@
     ".": "./src/sdk.js"
   },
   "bin": {
-    "busybase": "./src/server.js"
+    "busybase": "./src/cli.js"
   },
   "scripts": {
-    "start": "bun run src/server.ts",
-    "build": "bun build src/server.ts --target=bun --outfile=src/server.js --external vectordb && bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js"
+    "start": "bun run src/cli.ts serve",
+    "test": "bun run src/cli.ts test",
+    "build": "bun build src/server.ts --target=bun --outfile=src/server.js --external vectordb && bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js && bun build src/cli.ts --target=bun --outfile=src/cli.js --external vectordb"
   },
   "files": [
     "src/server.js",
-    "src/sdk.js"
+    "src/sdk.js",
+    "src/cli.js"
   ],
   "dependencies": {
     "vectordb": "^0.21.2"
   },
-  "keywords": ["database", "sqlite", "supabase", "rest", "api", "bun", "backend"],
+  "keywords": ["database", "sqlite", "supabase", "rest", "api", "bun", "backend", "vector"],
   "author": "AnEntrypoint",
   "license": "ISC",
   "repository": {
