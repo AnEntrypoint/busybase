@@ -1,5 +1,5 @@
 {
-  "name": "@lanmower/busybase",
+  "name": "busybase",
   "version": "1.0.0",
   "type": "module",
   "description": "HTTP SQLite database that feels like Supabase",
