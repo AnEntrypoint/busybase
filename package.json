@@ -2,16 +2,29 @@
   "name": "busybase",
   "version": "1.0.0",
   "type": "module",
-  "description": "HTTP SQLite database that feels like Supabase",
+  "description": "HTTP SQLite database that feels like Supabase — drop-in headless backend powered by Bun",
   "main": "./src/sdk.js",
+  "module": "./src/sdk.js",
+  "exports": {
+    ".": "./src/sdk.js"
+  },
   "bin": {
     "busybase": "./src/server.js"
   },
   "scripts": {
-    "start": "bun run src/server.ts"
+    "start": "bun run src/server.ts",
+    "build": "bun build src/server.ts --target=bun --outfile=src/server.js && bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js"
   },
+  "files": [
+    "src/server.js",
+    "src/sdk.js"
+  ],
   "dependencies": {},
-  "keywords": ["database", "sqlite", "supabase", "rest", "api"],
-  "author": "",
-  "license": "ISC"
+  "keywords": ["database", "sqlite", "supabase", "rest", "api", "bun", "backend"],
+  "author": "AnEntrypoint",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AnEntrypoint/busybase.git"
+  }
 }

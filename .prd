@@ -1,17 +1,6 @@
 {
   "project": "busybase",
   "objective": "Create a Supabase-like HTTP API using Bun with built-in SQLite, publish as AnEntrypoint/busybase, SDK must feel like Supabase",
-  "items": [
-    {
-      "id": "publish-npm",
-      "subject": "Publish to npm as AnEntrypoint/busybase",
-      "status": "pending",
-      "description": "Package properly with package.json, publish to npm registry under AnEntrypoint organization. Must work with bunx busybase",
-      "blocking": [],
-      "blockedBy": [],
-      "effort": "small",
-      "category": "infra"
-    }
-  ],
-  "completed": ["create-server", "create-sdk", "test-system"]
+  "items": [],
+  "completed": ["create-server", "create-sdk", "test-system", "publish-npm"]
 }
