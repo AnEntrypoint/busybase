@@ -417,10 +417,16 @@ Bun.serve({ port: PORT, fetch: async (req) => {
     }
   }
 
-  if (pathname === "/" || pathname === "/gui") {
-    const file = Bun.file(new URL("./gui.html", import.meta.url));
+  const staticRoutes: Record<string, string> = {
+    "/": "./gui.html",
+    "/gui": "./gui.html",
+    "/docs": "../docs/docs.html",
+    "/site": "../docs/index.html",
+  };
+  if (pathname in staticRoutes) {
+    const file = Bun.file(new URL(staticRoutes[pathname], import.meta.url));
     if (await file.exists()) return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
-    return err("GUI not found", 404);
+    return err("Not found", 404);
   }
 
   return err("Not found", 404);
