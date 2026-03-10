@@ -6,3 +6,9 @@
 nul
 node_modules/
 test.ts
+test_binary.ts
+test_lance.ts
+test_lance2.ts
+busybase-test.exe
+busybase-test
+*_data/
