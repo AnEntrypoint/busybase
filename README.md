@@ -1,90 +1,119 @@
 # BusyBase
 
-A drop-in headless Supabase alternative — minimal, self-hosted, no Docker required.
+[![License: MIT](https://img.shields.io/badge/License-MIT-7c6af7.svg)](LICENSE)
+[![Built with Bun](https://img.shields.io/badge/Built%20with-Bun-f9f1e1.svg?logo=bun)](https://bun.sh)
+[![LanceDB](https://img.shields.io/badge/Storage-LanceDB-38bdf8.svg)](https://lancedb.com)
+[![Supabase Compatible](https://img.shields.io/badge/API-Supabase%20JS%20v2-3ecf8e.svg)](https://supabase.com/docs/reference/javascript)
+[![Releases](https://img.shields.io/github/v/release/AnEntrypoint/busybase?color=a78bfa)](https://github.com/AnEntrypoint/busybase/releases)
 
-Built on [Bun](https://bun.sh) + [LanceDB](https://lancedb.com). Single process, file-based, supports **vector search** natively. Compatible with Supabase JS client v2 API.
+**A minimal, drop-in Supabase alternative — self-hosted, no Docker, no Postgres, no config files.**
+
+Built on [Bun](https://bun.sh) + [LanceDB](https://lancedb.com). Single process. File-based storage. Native **vector search**. **Ed25519 keypair auth** (anonymous-first). Supabase JS v2 compatible API. Ships as a single binary.
+
+**[Documentation](https://anentrypoint.github.io/busybase/docs.html)** · **[Website](https://anentrypoint.github.io/busybase/)** · **[Releases](https://github.com/AnEntrypoint/busybase/releases)**
+
+---
+
+## Feature Table
+
+| Feature | BusyBase | Supabase (self-hosted) | PocketBase |
+|---|:---:|:---:|:---:|
+| Supabase JS v2 compatible | ✅ | ✅ | ❌ |
+| Single binary deploy | ✅ | ❌ | ✅ |
+| No Docker required | ✅ | ❌ | ✅ |
+| Native vector search | ✅ | ⚠️ pgvector | ❌ |
+| Ed25519 keypair auth | ✅ | ❌ | ❌ |
+| Anonymous-first auth | ✅ | ⚠️ anon key | ❌ |
+| File-based storage | ✅ | ❌ | ✅ |
+| Pluggable hooks (18 hooks) | ✅ | ⚠️ Edge Functions | ⚠️ JS hooks |
+| Zero config startup | ✅ | ❌ | ✅ |
+| Built-in SMTP email | ✅ | ⚠️ external | ✅ |
+| Realtime subscriptions | ❌ | ✅ | ✅ |
+
+---
 
 ## Quick Start
 
 ```sh
-# Start server
+# Start server (default: http://localhost:54321)
 bunx busybase serve
 
-# Or download a standalone binary from Releases (no Bun required)
-./busybase-linux-x64 serve
+# Or download a standalone binary — no Bun required
+curl -L https://github.com/AnEntrypoint/busybase/releases/latest/download/busybase-linux-x64 -o busybase
+chmod +x busybase && ./busybase serve
 ```
 
-Server starts on `http://localhost:54321` by default.
+```ts
+import BB from "busybase";
 
-**Environment variables:**
+const db = BB("http://localhost:54321", "local");
 
-| Variable | Default | Description |
-|---|---|---|
-| `BUSYBASE_PORT` | `54321` | HTTP port |
-| `BUSYBASE_DIR` | `busybase_data` | Data directory |
-| `BUSYBASE_URL` | `http://localhost:54321` | URL for CLI commands |
+// Anonymous-first auth — no email/password needed!
+const { data: { user, session } } = await db.auth.keypair.signIn();
 
----
+// Insert (auto-creates table)
+await db.from("todos").insert({ title: "Buy milk", done: false });
 
-## CLI
+// Query
+const { data } = await db.from("todos").select("*").eq("done", false);
 
-The CLI is the first-class interface — all commands use the same SDK client:
+// Vector search
+await db.from("docs").insert({ text: "Bun is fast", vector: [0.9, 0.1, 0.0] });
+const { data: results } = await db.from("docs").select("*").vec([0.85, 0.1, 0.0], 5);
+```
 
 ```sh
-busybase serve                           # Start server
-busybase test                            # Run full SDK test suite
-busybase signup user@example.com pass    # Register user
-busybase signin user@example.com pass    # Sign in (prints token)
-busybase user                            # Get current user
-busybase insert todos '{"title":"Buy milk"}'
-busybase query todos done=false
-busybase update todos '{"done":"true"}' title=Buy\ milk
-busybase delete todos title=Buy\ milk
-busybase vec embeddings '[1,0,0,0]' 5   # Vector search
+# Run the full SDK test suite against your live server
+bunx busybase test
 ```
 
 ---
 
-## SDK
+## Installation
 
-```js
-import BB from "busybase"; // or: const { createClient } = require("busybase")
+```sh
+# Run without installing
+bunx busybase serve
 
-const db = BB("http://localhost:54321", "your-api-key");
+# Install globally
+bun install -g busybase
+
+# SDK only
+bun add busybase
+npm install busybase
 ```
-
-Mirrors the [Supabase JS client v2](https://supabase.com/docs/reference/javascript) API — `{ data, error }` response shape throughout.
 
 ---
 
 ## Auth
 
-```js
-// Sign up
-const { data, error } = await db.auth.signUp({ email, password });
+BusyBase supports two auth flows — both return the standard `{ data, error }` shape.
 
-// Sign in
-const { data, error } = await db.auth.signInWithPassword({ email, password });
-// data.session.access_token, data.user
+### Keypair Auth (Ed25519 — anonymous-first, zero deps)
 
-// Get current user
-const { data } = await db.auth.getUser();
-// data.user
+```ts
+// Sign in instantly — no email, no password, no form
+const { data } = await db.auth.keypair.signIn();
+// data.user.id — persistent UUID, same every time
+// data.session.access_token
 
-// Get current session (local, no network)
-const { data } = await db.auth.getSession();
-// data.session
+// Backup your keypair (save these!)
+const { privkey, pubkey } = db.auth.keypair.export();
 
-// Update user metadata / password
-await db.auth.updateUser({ password: "new", data: { name: "Alice" } });
+// Restore on any device
+await db.auth.keypair.restore(privkey, pubkey);
+// Same user.id ✓
 
-// Auth state change listener
-const { data: { subscription } } = db.auth.onAuthStateChange((event, session) => {
-  // events: INITIAL_SESSION, SIGNED_IN, SIGNED_OUT
-});
-subscription.unsubscribe();
+// Add email/password to a keypair account later
+await db.auth.updateUser({ email: "user@example.com", password: "secret" });
+```
 
-// Sign out
+### Email / Password
+
+```ts
+await db.auth.signUp({ email, password, options: { data: { name: "Alice" } } });
+const { data: { user, session } } = await db.auth.signInWithPassword({ email, password });
+await db.auth.updateUser({ password: "newpassword", data: { plan: "pro" } });
 await db.auth.signOut();
 ```
 
@@ -92,88 +121,142 @@ await db.auth.signOut();
 
 ## Database (CRUD)
 
-Tables are created automatically on first insert.
+Tables are created automatically on first insert. No schema definition required.
 
-```js
+```ts
 // Insert
-const { data, error } = await db.from("todos").insert({ title: "Buy milk", done: false });
-
-// Batch insert
-await db.from("todos").insert([
-  { title: "Read book", done: true },
-  { title: "Exercise", done: false },
-]);
+const { data } = await db.from("todos").insert({ title: "Buy milk" });
+await db.from("todos").insert([{ title: "A" }, { title: "B" }]); // batch
 
 // Select
-const { data } = await db.from("todos").select("*");
+await db.from("todos").select("*");
+await db.from("todos").select("id,title"); // specific columns
 
-// Select specific columns
-const { data } = await db.from("todos").select("title,done");
+// Filters
+await db.from("todos").select("*")
+  .eq("done", false)
+  .like("title", "Buy")
+  .order("title", { ascending: true })
+  .limit(20)
+  .offset(0);
 
 // Update
-await db.from("todos").update({ done: true }).eq("title", "Buy milk");
+await db.from("todos").update({ done: true }).eq("id", "abc");
 
 // Delete
-await db.from("todos").delete().eq("title", "Buy milk");
+await db.from("todos").delete().eq("done", true);
 ```
 
-### Filters
+### Filter operators
 
-```js
-.eq("col", val)          // =
-.neq("col", val)         // !=
-.gt("col", val)          // >
-.gte("col", val)         // >=
-.lt("col", val)          // <
-.lte("col", val)         // <=
-.like("col", "pattern")  // LIKE '%pattern%'
-.ilike("col", "pattern") // LIKE '%pattern%' (case-insensitive)
-.is("col", null)         // IS NULL / IS NOT NULL
-.in("col", [a, b, c])   // IN (a, b, c)
-.not("col", "eq", val)  // NOT col = val
-.or("col.eq.a,col.eq.b") // OR clause
-```
+| Method | SQL |
+|---|---|
+| `.eq(col, val)` | `col = val` |
+| `.neq(col, val)` | `col != val` |
+| `.gt(col, val)` | `col > val` |
+| `.gte(col, val)` | `col >= val` |
+| `.lt(col, val)` | `col < val` |
+| `.lte(col, val)` | `col <= val` |
+| `.like(col, val)` | `col LIKE '%val%'` |
+| `.ilike(col, val)` | case-insensitive LIKE |
+| `.is(col, null)` | `col IS NULL` |
+| `.in(col, [a,b,c])` | `col IN (a, b, c)` |
+| `.not(col, "eq", val)` | `NOT col = val` |
+| `.or("a.eq.1,b.eq.2")` | `a=1 OR b=2` |
 
 ### Modifiers
 
-```js
-.order("col", { ascending: true })
-.limit(10)
-.offset(20)
-.range(0, 9)          // rows 0–9
-.count("exact")       // adds { count: N } to response
-.single()             // return object instead of array (error if 0 rows)
-.maybeSingle()        // return object or null (no error if 0 rows)
-```
+| Method | Description |
+|---|---|
+| `.order(col, { ascending })` | Sort results |
+| `.limit(n)` | Max rows (default: 1000) |
+| `.offset(n)` | Skip N rows |
+| `.range(from, to)` | Rows from–to inclusive |
+| `.count("exact")` | Add `count` + `Content-Range` header |
+| `.single()` | Return object (error if 0 rows) |
+| `.maybeSingle()` | Return object or null (no error) |
+| `.vec(embedding, limit)` | Vector similarity search |
 
 ---
 
 ## Vector Search
 
-Store embeddings with your data, query by similarity:
-
-```js
-// Insert rows with a `vector` field
-await db.from("docs").insert([
+```ts
+// Insert with vectors
+await db.from("articles").insert([
   { title: "Cats article", vector: [0.9, 0.1, 0.0, 0.0] },
   { title: "Dogs article", vector: [0.1, 0.9, 0.0, 0.0] },
 ]);
 
-// Search — sorted by similarity, includes `_distance`
-const { data } = await db.from("docs").select("*").vec([0.85, 0.15, 0.0, 0.0], 5);
-// data[0].title === "Cats article", data[0]._distance === 0.03...
+// Search by similarity (returns _distance field)
+const { data } = await db.from("articles").select("*").vec([0.85, 0.15, 0.0, 0.0], 5);
+// data[0].title === "Cats article"
+// data[0]._distance === 0.02...
 
 // Combine with filters
-const { data } = await db.from("docs").vec([...], 10).eq("published", "true");
+await db.from("articles").select("*").vec([...], 10).eq("category", "pets");
 ```
 
-Generate vectors with any embedding model (OpenAI, Ollama, etc.) and pass them in.
+Works with any embedding model — OpenAI, Ollama, Cohere, local models, etc.
+
+---
+
+## Hooks
+
+Point `BUSYBASE_HOOKS` to a TypeScript file:
+
+```sh
+BUSYBASE_HOOKS=./hooks.ts bunx busybase serve
+```
+
+All 18 hooks are optional. Return `{ error: "message" }` from any hook to abort the operation.
+
+```ts
+// hooks.ts
+export const canAccess = ({ user, table, method }) => {
+  if (!user && method !== "GET") return { error: "Login required" };
+};
+
+export const beforeInsert = (table, rows) => {
+  if (table === "comments") rows.forEach(r => r.created_at = new Date().toISOString());
+};
+
+export const onSignup = async (user) => {
+  await sendWelcomeEmail(user.email);
+};
+
+export const sendEmail = async ({ to, subject, html }) => {
+  // Override built-in SMTP — use Resend, SendGrid, etc.
+  await resend.emails.send({ from: "noreply@myapp.com", to, subject, html });
+};
+```
+
+### All available hooks
+
+| Hook | Category | Description |
+|---|---|---|
+| `onSignup(user)` | Auth | New user created |
+| `onSignin(user)` | Auth | User signed in |
+| `onSignout(user)` | Auth | User signed out |
+| `onEmailChange(user, newEmail)` | Auth | Email update requested |
+| `onPasswordReset(email, token)` | Auth | Password reset requested |
+| `onUserUpdate(user, changes)` | Auth | User metadata updated |
+| `onRequest(req)` | Middleware | Every HTTP request (return Response to short-circuit) |
+| `canAccess({ user, table, method })` | Access | Row-level access control |
+| `beforeInsert(table, rows)` | Data | Before rows inserted |
+| `afterInsert(table, rows)` | Data | After rows inserted (pipe) |
+| `beforeUpdate(table, rows, changes)` | Data | Before rows updated |
+| `afterUpdate(table, rows)` | Data | After rows updated (pipe) |
+| `beforeDelete(table, rows)` | Data | Before rows deleted |
+| `afterDelete(table, rows)` | Data | After rows deleted |
+| `beforeSelect(table, params)` | Data | Before query executes (pipe) |
+| `afterSelect(table, rows)` | Data | After query executes (pipe) |
+| `sendEmail({ to, subject, html })` | Email | Override all email sending |
+| `onIssueSession(user)` | Session | Customize session payload |
 
 ---
 
 ## REST API
-
-HTTP API compatible with Supabase REST:
 
 | Method | Path | Description |
 |---|---|---|
@@ -181,32 +264,78 @@ HTTP API compatible with Supabase REST:
 | `POST` | `/rest/v1/:table` | Insert rows |
 | `PATCH` | `/rest/v1/:table?eq.col=val` | Update rows |
 | `DELETE` | `/rest/v1/:table?eq.col=val` | Delete rows |
-| `POST` | `/auth/v1/signup` | Register |
-| `POST` | `/auth/v1/token` | Sign in |
-| `GET` | `/auth/v1/user` | Current user |
+| `GET` | `/auth/v1/keypair` | Get nonce (step 1 of keypair auth) |
+| `POST` | `/auth/v1/keypair` | Verify signature (step 2) |
+| `POST` | `/auth/v1/signup` | Register email/password user |
+| `POST` | `/auth/v1/token` | Sign in with email/password |
+| `GET` | `/auth/v1/user` | Get current user |
 | `PATCH` | `/auth/v1/update` | Update user |
 | `POST` | `/auth/v1/logout` | Sign out |
+| `POST` | `/auth/v1/recover` | Request password reset |
+| `POST` | `/auth/v1/verify` | Confirm reset token + new password |
 
-All responses are `{ data, error }` shaped. Vector search: `GET /rest/v1/table?vec=[...]&limit=5`.
+Supports: `Prefer: return=minimal` (204 response), `Prefer: count=exact` + `Content-Range` header, CORS on all routes.
+
+---
+
+## CLI
+
+```sh
+busybase serve                           # Start server
+busybase test                            # Full SDK e2e test suite
+busybase signup user@example.com pass    # Register user
+busybase signin user@example.com pass    # Sign in (prints token)
+busybase user                            # Get current user
+busybase insert todos '{"title":"Buy milk"}'
+busybase query  todos done=false
+busybase update todos '{"done":"true"}' title=Buy\ milk
+busybase delete todos done=true
+busybase vec embeddings '[1,0,0,0]' 5    # Vector search
+```
+
+---
+
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `BUSYBASE_PORT` | `54321` | HTTP port |
+| `BUSYBASE_DIR` | `busybase_data` | Data directory (LanceDB Arrow files) |
+| `BUSYBASE_URL` | `http://localhost:54321` | Public URL (used in reset email links) |
+| `BUSYBASE_HOOKS` | — | Path to your hooks file |
+| `BUSYBASE_SMTP_HOST` | — | SMTP hostname |
+| `BUSYBASE_SMTP_PORT` | `587` | SMTP port |
+| `BUSYBASE_SMTP_USER` | — | SMTP username |
+| `BUSYBASE_SMTP_PASS` | — | SMTP password |
+| `BUSYBASE_SMTP_FROM` | SMTP_USER | From address |
 
 ---
 
 ## Standalone Binaries
 
-Every push to `master` builds self-contained executables — no Bun or Node required:
+Every push to `master` builds self-contained executables — no Bun or Node.js required:
 
-- `busybase-linux-x64`
-- `busybase-macos-arm64`
-- `busybase-windows-x64.exe`
+| Platform | File |
+|---|---|
+| Linux x64 | `busybase-linux-x64` |
+| macOS ARM64 (Apple Silicon) | `busybase-macos-arm64` |
+| Windows x64 | `busybase-windows-x64.exe` |
 
-Download from [Releases](../../releases).
+Download from [Releases](https://github.com/AnEntrypoint/busybase/releases).
 
 ---
 
 ## Architecture
 
-- **Storage:** [LanceDB](https://lancedb.com) — Apache Arrow columnar store, fully file-based, no server process
-- **Auth:** bcrypt hashing via `Bun.password`, UUID session tokens with 7-day expiry
-- **Vector search:** Native ANN via LanceDB — rows without vectors get a transparent dummy `[0]`
-- **CLI = SDK = Server** — all share the same structures, CLI is the test runner
-- **~160 lines** server + **~80 lines** SDK
+- **Runtime:** [Bun](https://bun.sh) — native TypeScript, sub-ms startup, single binary compilation
+- **Storage:** [LanceDB](https://lancedb.com) — Apache Arrow columnar files, no server process, `cp -r` to backup
+- **Auth:** Ed25519 via WebCrypto (zero deps) + bcrypt via `Bun.password`
+- **Sessions:** UUID tokens, 7-day expiry, stored in `_sessions` LanceDB table
+- **Vector search:** LanceDB ANN — rows without vectors get a transparent sentinel `[0]`
+- **CLI = SDK = Server** — the CLI uses the real SDK, making `busybase test` a true e2e test runner
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
