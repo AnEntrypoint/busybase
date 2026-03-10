@@ -1,0 +1,2131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BusyBase Documentation</title>
+<meta name="description" content="Full documentation for BusyBase — REST API, Auth, Vector Search, Hooks, SDK, CLI, and Self-hosting.">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/typescript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+<style>
+  :root {
+    --bg: #0d0d14;
+    --bg2: #12121e;
+    --bg3: #1a1a2a;
+    --bg4: #22223a;
+    --border: #2a2a42;
+    --accent: #7c6af7;
+    --accent2: #a78bfa;
+    --accent3: #38bdf8;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --text: #e2e8f0;
+    --muted: #8892a4;
+    --sidebar-w: 280px;
+    --radius: 10px;
+    --radius-sm: 6px;
+    --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  [data-theme="light"] {
+    --bg: #fafafa;
+    --bg2: #ffffff;
+    --bg3: #f1f5f9;
+    --bg4: #e2e8f0;
+    --border: #cbd5e1;
+    --text: #0f172a;
+    --muted: #64748b;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+
+  /* ── Top bar ── */
+  .topbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 56px;
+    background: rgba(13,13,20,0.9);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--border);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    padding: 0 1.5rem;
+    gap: 1.5rem;
+  }
+  [data-theme="light"] .topbar { background: rgba(250,250,250,0.9); }
+  .topbar-logo {
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent2);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .topbar-logo span { color: var(--accent3); }
+  .topbar-sep { height: 20px; width: 1px; background: var(--border); }
+  .topbar-title {
+    font-size: 0.85rem;
+    color: var(--muted);
+    flex: 1;
+  }
+  .topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .topbar-link {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.85rem;
+    transition: color 0.2s;
+  }
+  .topbar-link:hover { color: var(--text); }
+  .theme-btn {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+  }
+  .theme-btn:hover { background: var(--bg4); }
+  .menu-btn {
+    display: none;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    width: 34px; height: 34px;
+    align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: 1.1rem;
+  }
+
+  /* ── Layout ── */
+  .layout {
+    display: flex;
+    margin-top: 56px;
+    min-height: calc(100vh - 56px);
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    position: fixed;
+    top: 56px;
+    left: 0;
+    bottom: 0;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    background: var(--bg2);
+    padding: 1.5rem 0;
+    transition: transform 0.25s;
+    z-index: 150;
+  }
+  .sidebar::-webkit-scrollbar { width: 4px; }
+  .sidebar::-webkit-scrollbar-track { background: transparent; }
+  .sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .sidebar-section {
+    margin-bottom: 1.5rem;
+    padding: 0 1rem;
+  }
+  .sidebar-section-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+  .sidebar-items { list-style: none; }
+  .sidebar-items li a {
+    display: block;
+    padding: 0.35rem 0.75rem;
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    font-size: 0.875rem;
+    color: var(--muted);
+    transition: all 0.15s;
+    border-left: 2px solid transparent;
+  }
+  .sidebar-items li a:hover {
+    background: var(--bg3);
+    color: var(--text);
+  }
+  .sidebar-items li a.active {
+    background: rgba(124,106,247,0.1);
+    color: var(--accent2);
+    border-left-color: var(--accent);
+  }
+
+  /* ── Main content ── */
+  .main {
+    flex: 1;
+    margin-left: var(--sidebar-w);
+    min-width: 0;
+    padding: 3rem 4rem 6rem;
+    max-width: 900px;
+  }
+
+  /* ── Sections ── */
+  .doc-section {
+    margin-bottom: 5rem;
+    scroll-margin-top: 80px;
+  }
+  h1.doc-title {
+    font-size: 2.4rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.75rem;
+    color: var(--text);
+    line-height: 1.2;
+  }
+  .doc-intro {
+    font-size: 1.05rem;
+    color: var(--muted);
+    margin-bottom: 2.5rem;
+    max-width: 600px;
+    line-height: 1.75;
+  }
+  h2 {
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    margin: 2.5rem 0 1rem;
+    color: var(--text);
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+    scroll-margin-top: 80px;
+  }
+  h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 2rem 0 0.75rem;
+    color: var(--text);
+    scroll-margin-top: 80px;
+  }
+  h4 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--accent2);
+    margin: 1.5rem 0 0.5rem;
+    font-family: var(--font-mono);
+    scroll-margin-top: 80px;
+  }
+  p { margin-bottom: 1rem; color: var(--text); }
+  p:last-child { margin-bottom: 0; }
+
+  a { color: var(--accent2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15em 0.4em;
+    color: var(--accent2);
+  }
+
+  /* Override highlight.js code blocks */
+  pre {
+    margin: 1rem 0 1.5rem;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    overflow: hidden;
+    position: relative;
+  }
+  pre code {
+    font-size: 0.875rem !important;
+    line-height: 1.75 !important;
+    border: none;
+    background: none;
+    padding: 1.5rem !important;
+    display: block;
+    overflow-x: auto;
+    color: inherit;
+  }
+  .hljs { background: #1a1a2e !important; }
+  [data-theme="light"] .hljs { background: #f8f8ff !important; }
+  .copy-btn {
+    position: absolute;
+    top: 0.6rem; right: 0.6rem;
+    background: var(--bg4);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 4px;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.72rem;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    transition: all 0.2s;
+    z-index: 1;
+  }
+  .copy-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .copy-btn.copied { background: var(--green); color: #fff; border-color: var(--green); }
+
+  /* ── Callouts ── */
+  .callout {
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+    margin: 1.5rem 0;
+    border-left: 3px solid;
+    font-size: 0.9rem;
+  }
+  .callout-title {
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .callout.info { background: rgba(56,189,248,0.07); border-color: var(--accent3); }
+  .callout.info .callout-title { color: var(--accent3); }
+  .callout.tip { background: rgba(52,211,153,0.07); border-color: var(--green); }
+  .callout.tip .callout-title { color: var(--green); }
+  .callout.warn { background: rgba(251,191,36,0.07); border-color: var(--yellow); }
+  .callout.warn .callout-title { color: var(--yellow); }
+  .callout.danger { background: rgba(248,113,113,0.07); border-color: var(--red); }
+  .callout.danger .callout-title { color: var(--red); }
+
+  /* ── Tables ── */
+  .table-wrap { overflow-x: auto; margin: 1rem 0 1.5rem; border-radius: var(--radius); border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  th {
+    background: var(--bg3);
+    padding: 0.75rem 1rem;
+    text-align: left;
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td { padding: 0.75rem 1rem; border-bottom: 1px solid rgba(42,42,66,0.4); vertical-align: top; }
+  [data-theme="light"] td { border-bottom-color: rgba(203,213,225,0.5); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(124,106,247,0.03); }
+  td code { font-size: 0.82em; }
+
+  /* ── Param blocks ── */
+  .param-block {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin: 1rem 0 1.5rem;
+  }
+  .param-row {
+    display: grid;
+    grid-template-columns: 200px 120px 1fr;
+    gap: 1rem;
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    align-items: baseline;
+    font-size: 0.875rem;
+  }
+  .param-row:last-child { border-bottom: none; }
+  .param-name { font-family: var(--font-mono); color: var(--accent2); }
+  .param-type { font-family: var(--font-mono); color: var(--accent3); font-size: 0.8rem; }
+  .param-desc { color: var(--muted); }
+  .param-header {
+    display: grid;
+    grid-template-columns: 200px 120px 1fr;
+    gap: 1rem;
+    padding: 0.5rem 1.25rem;
+    background: var(--bg3);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+  }
+  .badge-req {
+    display: inline-block;
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    background: rgba(248,113,113,0.15);
+    color: var(--red);
+    border-radius: 3px;
+    font-weight: 700;
+    vertical-align: middle;
+    margin-left: 0.3rem;
+  }
+  .badge-opt {
+    display: inline-block;
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    background: rgba(52,211,153,0.1);
+    color: var(--green);
+    border-radius: 3px;
+    font-weight: 700;
+    vertical-align: middle;
+    margin-left: 0.3rem;
+  }
+
+  /* ── Hook cards ── */
+  .hook-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .hook-card:hover { border-color: rgba(124,106,247,0.4); }
+  .hook-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg3);
+  }
+  .hook-name {
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent2);
+  }
+  .hook-category {
+    font-size: 0.72rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 100px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+  }
+  .cat-auth { background: rgba(124,106,247,0.15); color: var(--accent2); }
+  .cat-data { background: rgba(56,189,248,0.12); color: var(--accent3); }
+  .cat-req  { background: rgba(52,211,153,0.12); color: var(--green); }
+  .cat-email { background: rgba(251,191,36,0.12); color: var(--yellow); }
+  .cat-session { background: rgba(248,113,113,0.12); color: var(--red); }
+  .hook-body { padding: 1.25rem; }
+  .hook-sig {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--muted);
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    padding: 0.6rem 0.9rem;
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--border);
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .hook-desc { font-size: 0.9rem; color: var(--muted); margin-bottom: 0.5rem; }
+  .hook-return { font-size: 0.85rem; color: var(--muted); }
+  .hook-return strong { color: var(--text); }
+
+  /* ── Method badges ── */
+  .method {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    margin-right: 0.4rem;
+  }
+  .get    { background: rgba(52,211,153,0.15); color: var(--green); }
+  .post   { background: rgba(56,189,248,0.15); color: var(--accent3); }
+  .patch  { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .put    { background: rgba(124,106,247,0.15); color: var(--accent2); }
+  .delete { background: rgba(248,113,113,0.15); color: var(--red); }
+
+  /* ── Endpoint rows ── */
+  .endpoint {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .endpoint-path { color: var(--text); font-weight: 600; }
+  .endpoint-desc { color: var(--muted); font-family: var(--font-sans); font-size: 0.85rem; margin-left: auto; }
+
+  /* ── Env var table ── */
+  .env-name {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    color: var(--accent3);
+    white-space: nowrap;
+  }
+
+  /* ── CLI command blocks ── */
+  .cli-cmd {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-bottom: 1.5rem;
+  }
+  .cli-cmd-line {
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.6rem 1rem;
+    color: var(--text);
+  }
+  .cli-prompt { color: var(--green); margin-right: 0.5rem; }
+
+  /* ── Responsive ── */
+  @media (max-width: 900px) {
+    .sidebar { transform: translateX(-100%); }
+    .sidebar.open { transform: translateX(0); }
+    .main { margin-left: 0; padding: 2rem 1.5rem 4rem; }
+    .menu-btn { display: flex !important; }
+    .param-row { grid-template-columns: 1fr; gap: 0.25rem; }
+    .param-header { display: none; }
+  }
+  @media (max-width: 600px) {
+    h1.doc-title { font-size: 1.8rem; }
+    h2 { font-size: 1.3rem; }
+    .main { padding: 1.5rem 1rem 4rem; }
+  }
+
+  /* ── Progress indicator ── */
+  #reading-progress {
+    position: fixed;
+    top: 56px; left: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--accent3));
+    z-index: 300;
+    transition: width 0.1s;
+    width: 0%;
+  }
+
+  /* ── Back to top ── */
+  .back-top {
+    position: fixed;
+    bottom: 2rem; right: 2rem;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    width: 40px; height: 40px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: 1.1rem;
+    box-shadow: 0 4px 20px rgba(124,106,247,0.4);
+    transition: all 0.2s;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .back-top.visible { opacity: 1; pointer-events: all; }
+  .back-top:hover { background: var(--accent2); transform: translateY(-2px); }
+
+  /* overlay for mobile sidebar */
+  .overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 140;
+  }
+  .overlay.open { display: block; }
+
+  ul, ol { padding-left: 1.5rem; margin-bottom: 1rem; }
+  li { margin-bottom: 0.25rem; }
+</style>
+</head>
+<body>
+
+<div id="reading-progress"></div>
+
+<!-- Top bar -->
+<header class="topbar">
+  <button class="menu-btn" onclick="toggleSidebar()" aria-label="Menu">☰</button>
+  <a href="index.html" class="topbar-logo">Busy<span>Base</span></a>
+  <div class="topbar-sep"></div>
+  <span class="topbar-title">Documentation</span>
+  <div class="topbar-actions">
+    <a href="index.html" class="topbar-link">Home</a>
+    <a href="https://github.com/AnEntrypoint/busybase" class="topbar-link" target="_blank" rel="noopener">GitHub</a>
+    <button class="theme-btn" onclick="toggleTheme()" aria-label="Toggle theme" title="Toggle light/dark mode">☀</button>
+  </div>
+</header>
+
+<div class="overlay" id="overlay" onclick="toggleSidebar()"></div>
+
+<div class="layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar" id="sidebar">
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Getting Started</div>
+      <ul class="sidebar-items">
+        <li><a href="#intro">Introduction</a></li>
+        <li><a href="#install">Installation</a></li>
+        <li><a href="#quickstart">Quick Start</a></li>
+        <li><a href="#configuration">Configuration</a></li>
+      </ul>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">API Reference</div>
+      <ul class="sidebar-items">
+        <li><a href="#rest-api">REST API</a></li>
+        <li><a href="#filters">Filters &amp; Operators</a></li>
+        <li><a href="#auth-api">Auth Endpoints</a></li>
+      </ul>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Auth</div>
+      <ul class="sidebar-items">
+        <li><a href="#keypair-auth">Keypair Auth (Ed25519)</a></li>
+        <li><a href="#email-auth">Email / Password</a></li>
+        <li><a href="#sessions">Sessions</a></li>
+        <li><a href="#password-reset">Password Reset</a></li>
+      </ul>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Features</div>
+      <ul class="sidebar-items">
+        <li><a href="#vector-search">Vector Search</a></li>
+        <li><a href="#hooks">Hooks System</a></li>
+        <li><a href="#email-smtp">Email / SMTP</a></li>
+      </ul>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">SDK</div>
+      <ul class="sidebar-items">
+        <li><a href="#sdk">SDK Reference</a></li>
+        <li><a href="#sdk-auth">auth.*</a></li>
+        <li><a href="#sdk-from">from().*</a></li>
+        <li><a href="#sdk-filters">Filters</a></li>
+        <li><a href="#sdk-modifiers">Modifiers</a></li>
+      </ul>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">CLI</div>
+      <ul class="sidebar-items">
+        <li><a href="#cli">CLI Reference</a></li>
+      </ul>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Self-Hosting</div>
+      <ul class="sidebar-items">
+        <li><a href="#self-hosting">Deployment</a></li>
+        <li><a href="#binary">Standalone Binary</a></li>
+      </ul>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Examples</div>
+      <ul class="sidebar-items">
+        <li><a href="#examples">Code Examples</a></li>
+      </ul>
+    </div>
+
+  </nav>
+
+  <!-- Main content -->
+  <main class="main">
+
+    <!-- ── Introduction ── -->
+    <div class="doc-section" id="intro">
+      <h1 class="doc-title">BusyBase Docs</h1>
+      <p class="doc-intro">
+        BusyBase is a minimal, self-hosted backend built on <strong>Bun</strong> and <strong>LanceDB</strong>.
+        It provides a Supabase JS v2-compatible API, Ed25519 keypair authentication, native vector search,
+        and a pluggable hooks system — with zero config, no Docker, and no external database process.
+      </p>
+
+      <div class="callout tip">
+        <div class="callout-title">Drop-in Supabase compatibility</div>
+        BusyBase mirrors the Supabase JS client v2 API. Change your URL and most existing Supabase code will work unchanged.
+      </div>
+
+      <h3>Key facts</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Property</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Runtime</td><td>Bun (TypeScript, zero transpile)</td></tr>
+            <tr><td>Storage</td><td>LanceDB — Apache Arrow file-based, no server process</td></tr>
+            <tr><td>Auth</td><td>Ed25519 keypair (WebCrypto) + email/password (bcrypt via Bun.password)</td></tr>
+            <tr><td>Sessions</td><td>UUID tokens, 7-day expiry, stored in LanceDB _sessions table</td></tr>
+            <tr><td>Vector search</td><td>LanceDB ANN — store <code>vector</code> field, query with <code>.vec(embedding, limit)</code></td></tr>
+            <tr><td>Response shape</td><td><code>&#123; data, error &#125;</code> — Supabase v2 compatible throughout</td></tr>
+            <tr><td>Default port</td><td>54321 (same as Supabase local dev)</td></tr>
+            <tr><td>License</td><td>MIT</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── Installation ── -->
+    <div class="doc-section" id="install">
+      <h2>Installation</h2>
+
+      <h3>Run with Bun (recommended)</h3>
+<pre><code class="language-bash"># Run directly without installing
+bunx busybase serve
+
+# Or install globally
+bun install -g busybase
+busybase serve</code></pre>
+
+      <h3>Download a standalone binary</h3>
+      <p>Pre-built binaries are available for every release — no Bun or Node.js required:</p>
+<pre><code class="language-bash"># Linux x64
+curl -L https://github.com/AnEntrypoint/busybase/releases/latest/download/busybase-linux-x64 -o busybase
+chmod +x busybase && ./busybase serve
+
+# macOS ARM64
+curl -L https://github.com/AnEntrypoint/busybase/releases/latest/download/busybase-macos-arm64 -o busybase
+chmod +x busybase && ./busybase serve
+
+# Windows x64
+# Download busybase-windows-x64.exe from Releases</code></pre>
+
+      <h3>SDK install</h3>
+<pre><code class="language-bash"># npm / bun / yarn / pnpm
+bun add busybase
+npm install busybase</code></pre>
+    </div>
+
+    <!-- ── Quick Start ── -->
+    <div class="doc-section" id="quickstart">
+      <h2>Quick Start</h2>
+
+<pre><code class="language-bash"># 1. Start the server
+bunx busybase serve
+# → BusyBase: http://localhost:54321</code></pre>
+
+<pre><code class="language-typescript">// 2. Connect and use (SDK)
+import BB from "busybase";
+
+const db = BB("http://localhost:54321", "local");
+
+// Auto sign-in with keypair (anonymous, no email needed)
+const { data: { user, session } } = await db.auth.keypair.signIn();
+
+// Insert data (table created automatically)
+await db.from("todos").insert({ title: "Learn BusyBase", done: false });
+
+// Query
+const { data: todos } = await db.from("todos").select("*").eq("done", false);
+console.log(todos); // [{ id: "...", title: "Learn BusyBase", done: "false" }]
+
+// Vector search
+await db.from("docs").insert([
+  { text: "Bun is fast", vector: [0.9, 0.1] },
+  { text: "LanceDB rocks", vector: [0.1, 0.9] },
+]);
+const { data: results } = await db.from("docs").select("*").vec([0.85, 0.15], 1);
+// results[0].text === "Bun is fast"</code></pre>
+
+<pre><code class="language-bash"># 3. Test everything works
+bunx busybase test
+# → 50+ passed, 0 failed</code></pre>
+    </div>
+
+    <!-- ── Configuration ── -->
+    <div class="doc-section" id="configuration">
+      <h2>Configuration</h2>
+      <p>BusyBase is configured entirely through environment variables — no config files required.</p>
+
+      <h3>Server environment variables</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="env-name">BUSYBASE_PORT</td>
+              <td><code>54321</code></td>
+              <td>HTTP port the server listens on</td>
+            </tr>
+            <tr>
+              <td class="env-name">BUSYBASE_DIR</td>
+              <td><code>busybase_data</code></td>
+              <td>Directory where LanceDB Arrow files are stored</td>
+            </tr>
+            <tr>
+              <td class="env-name">BUSYBASE_URL</td>
+              <td><code>http://localhost:54321</code></td>
+              <td>Public URL — used in password reset email links</td>
+            </tr>
+            <tr>
+              <td class="env-name">BUSYBASE_HOOKS</td>
+              <td>—</td>
+              <td>Path to your hooks file (e.g. <code>./hooks.ts</code>)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>SMTP email variables</h3>
+      <p>Set these to enable built-in email sending for password resets. All are optional — if not set, emails are logged to stdout only.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td class="env-name">BUSYBASE_SMTP_HOST</td><td>—</td><td>SMTP server hostname (e.g. <code>smtp.sendgrid.net</code>)</td></tr>
+            <tr><td class="env-name">BUSYBASE_SMTP_PORT</td><td><code>587</code></td><td>SMTP port (587 = STARTTLS, 465 = SSL)</td></tr>
+            <tr><td class="env-name">BUSYBASE_SMTP_USER</td><td>—</td><td>SMTP username / login</td></tr>
+            <tr><td class="env-name">BUSYBASE_SMTP_PASS</td><td>—</td><td>SMTP password</td></tr>
+            <tr><td class="env-name">BUSYBASE_SMTP_FROM</td><td><em>SMTP_USER</em></td><td>From address (defaults to BUSYBASE_SMTP_USER)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>CLI environment variables</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td class="env-name">BUSYBASE_URL</td><td><code>http://localhost:54321</code></td><td>Server URL for CLI commands</td></tr>
+            <tr><td class="env-name">BUSYBASE_KEY</td><td><code>local</code></td><td>API key sent in <code>apikey</code> / <code>Authorization</code> headers</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Example .env</h3>
+<pre><code class="language-bash">BUSYBASE_PORT=8080
+BUSYBASE_DIR=/var/data/busybase
+BUSYBASE_URL=https://api.myapp.com
+BUSYBASE_HOOKS=./hooks.ts
+
+# SMTP
+BUSYBASE_SMTP_HOST=smtp.resend.com
+BUSYBASE_SMTP_PORT=587
+BUSYBASE_SMTP_USER=resend
+BUSYBASE_SMTP_PASS=re_secret_key
+BUSYBASE_SMTP_FROM=noreply@myapp.com</code></pre>
+    </div>
+
+    <!-- ── REST API ── -->
+    <div class="doc-section" id="rest-api">
+      <h2>REST API</h2>
+      <p>BusyBase exposes a PostgREST-compatible REST API under <code>/rest/v1/</code>. All responses use the <code>&#123; data, error &#125;</code> shape.</p>
+
+      <h3>Database endpoints</h3>
+
+      <div class="endpoint">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/rest/v1/:table</span>
+        <span class="endpoint-desc">Query rows</span>
+      </div>
+      <div class="endpoint">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/rest/v1/:table</span>
+        <span class="endpoint-desc">Insert row(s)</span>
+      </div>
+      <div class="endpoint">
+        <span class="method patch">PATCH</span>
+        <span class="endpoint-path">/rest/v1/:table?eq.col=val</span>
+        <span class="endpoint-desc">Update rows matching filter</span>
+      </div>
+      <div class="endpoint">
+        <span class="method put">PUT</span>
+        <span class="endpoint-path">/rest/v1/:table?eq.col=val</span>
+        <span class="endpoint-desc">Update rows (alias for PATCH)</span>
+      </div>
+      <div class="endpoint">
+        <span class="method delete">DELETE</span>
+        <span class="endpoint-path">/rest/v1/:table?eq.col=val</span>
+        <span class="endpoint-desc">Delete rows matching filter</span>
+      </div>
+
+      <h3>Query parameters</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Parameter</th><th>Example</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>select</code></td><td><code>select=id,title</code></td><td>Comma-separated column list (default: <code>*</code>)</td></tr>
+            <tr><td><code>order</code></td><td><code>order=created.desc</code></td><td>Sort column + direction (<code>asc</code> or <code>desc</code>)</td></tr>
+            <tr><td><code>limit</code></td><td><code>limit=20</code></td><td>Max rows to return (default: 1000)</td></tr>
+            <tr><td><code>offset</code></td><td><code>offset=40</code></td><td>Skip N rows</td></tr>
+            <tr><td><code>count</code></td><td><code>count=exact</code></td><td>Include <code>count</code> in response + <code>Content-Range</code> header</td></tr>
+            <tr><td><code>vec</code></td><td><code>vec=[0.9,0.1]</code></td><td>Vector search — JSON array, returns sorted by <code>_distance</code></td></tr>
+            <tr><td><code>eq.col</code></td><td><code>eq.done=false</code></td><td>Filter: column equals value</td></tr>
+            <tr><td><code>neq.col</code></td><td><code>neq.status=draft</code></td><td>Filter: not equal</td></tr>
+            <tr><td><code>gt.col</code></td><td><code>gt.score=80</code></td><td>Filter: greater than</td></tr>
+            <tr><td><code>gte.col</code></td><td><code>gte.score=80</code></td><td>Filter: greater than or equal</td></tr>
+            <tr><td><code>lt.col</code></td><td><code>lt.price=100</code></td><td>Filter: less than</td></tr>
+            <tr><td><code>lte.col</code></td><td><code>lte.price=100</code></td><td>Filter: less than or equal</td></tr>
+            <tr><td><code>like.col</code></td><td><code>like.name=Ali</code></td><td>Filter: LIKE <code>%val%</code></td></tr>
+            <tr><td><code>ilike.col</code></td><td><code>ilike.name=ali</code></td><td>Filter: case-insensitive LIKE</td></tr>
+            <tr><td><code>is.col</code></td><td><code>is.deleted=null</code></td><td>Filter: IS NULL / IS NOT NULL</td></tr>
+            <tr><td><code>in.col</code></td><td><code>in.status=active,pending</code></td><td>Filter: value in list</td></tr>
+            <tr><td><code>not.col.op</code></td><td><code>not.role.eq=admin</code></td><td>Filter: NOT (col op val)</td></tr>
+            <tr><td><code>or</code></td><td><code>or=name.eq.Alice,name.eq.Bob</code></td><td>OR filter clause</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Request headers</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Header</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>Authorization: Bearer &lt;token&gt;</code></td><td>Session token for authenticated requests</td></tr>
+            <tr><td><code>apikey: &lt;key&gt;</code></td><td>API key (passed through, not validated by default)</td></tr>
+            <tr><td><code>Prefer: return=minimal</code></td><td>Return <code>204 No Content</code> instead of inserted/updated data</td></tr>
+            <tr><td><code>Prefer: count=exact</code></td><td>Include total count in response and <code>Content-Range</code> header</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Raw HTTP examples</h3>
+<pre><code class="language-bash"># Insert
+curl -X POST http://localhost:54321/rest/v1/todos \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Buy milk","done":false}'
+
+# Query with filter
+curl "http://localhost:54321/rest/v1/todos?eq.done=false&order=title.asc&limit=10"
+
+# Update
+curl -X PATCH "http://localhost:54321/rest/v1/todos?eq.title=Buy%20milk" \
+  -H "Content-Type: application/json" \
+  -d '{"done":true}'
+
+# Delete
+curl -X DELETE "http://localhost:54321/rest/v1/todos?eq.done=true"
+
+# Vector search
+curl "http://localhost:54321/rest/v1/docs?vec=[0.9,0.1,0.0]&limit=5"
+
+# With count
+curl "http://localhost:54321/rest/v1/todos?count=exact"
+# Response headers include: Content-Range: 0-9/42
+# Response body: { data: [...], error: null, count: 42 }</code></pre>
+    </div>
+
+    <!-- ── Filters reference ── -->
+    <div class="doc-section" id="filters">
+      <h2>Filters &amp; Operators</h2>
+      <p>Filters are applied as query parameters. Multiple filters are ANDed together. The <code>or</code> parameter creates OR clauses within a request.</p>
+
+<pre><code class="language-bash"># Single filter
+GET /rest/v1/users?eq.role=admin
+
+# Multiple filters (AND)
+GET /rest/v1/products?gt.price=10&lte.price=100&eq.active=true
+
+# OR filter
+GET /rest/v1/users?or=role.eq.admin,role.eq.moderator
+
+# IN filter
+GET /rest/v1/orders?in.status=pending,processing,shipped
+
+# NOT filter
+GET /rest/v1/users?not.role.eq=banned
+
+# LIKE filter (case-sensitive, matches substring)
+GET /rest/v1/users?like.name=ali
+# matches "Alice", "Alistair", etc.
+
+# IS NULL
+GET /rest/v1/posts?is.deleted_at=null</code></pre>
+    </div>
+
+    <!-- ── Auth API ── -->
+    <div class="doc-section" id="auth-api">
+      <h2>Auth Endpoints</h2>
+
+      <div class="endpoint">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/auth/v1/keypair</span>
+        <span class="endpoint-desc">Get a nonce for keypair sign-in</span>
+      </div>
+      <div class="endpoint">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/auth/v1/keypair</span>
+        <span class="endpoint-desc">Verify Ed25519 signature, get/create user + session</span>
+      </div>
+      <div class="endpoint">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/auth/v1/signup</span>
+        <span class="endpoint-desc">Register with email + password</span>
+      </div>
+      <div class="endpoint">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/auth/v1/token</span>
+        <span class="endpoint-desc">Sign in with email + password</span>
+      </div>
+      <div class="endpoint">
+        <span class="method get">GET</span>
+        <span class="endpoint-path">/auth/v1/user</span>
+        <span class="endpoint-desc">Get current user (requires Bearer token)</span>
+      </div>
+      <div class="endpoint">
+        <span class="method patch">PATCH</span>
+        <span class="endpoint-path">/auth/v1/update</span>
+        <span class="endpoint-desc">Update email, password, or metadata</span>
+      </div>
+      <div class="endpoint">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/auth/v1/logout</span>
+        <span class="endpoint-desc">Invalidate session token</span>
+      </div>
+      <div class="endpoint">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/auth/v1/recover</span>
+        <span class="endpoint-desc">Request password reset email</span>
+      </div>
+      <div class="endpoint">
+        <span class="method post">POST</span>
+        <span class="endpoint-path">/auth/v1/verify</span>
+        <span class="endpoint-desc">Verify reset token + set new password</span>
+      </div>
+    </div>
+
+    <!-- ── Keypair Auth ── -->
+    <div class="doc-section" id="keypair-auth">
+      <h2>Keypair Auth (Ed25519)</h2>
+      <p>BusyBase's primary auth flow is <strong>anonymous-first keypair auth</strong> using Ed25519 via the WebCrypto API. Users get a persistent cryptographic identity without any sign-up form.</p>
+
+      <div class="callout info">
+        <div class="callout-title">How it works</div>
+        On first call, BusyBase generates an Ed25519 keypair in the browser/runtime, stores it in <code>localStorage</code> (browser) or memory (server), signs a server-issued nonce, and receives a session. The same keypair always maps to the same user ID — across devices, after restoring from backup.
+      </div>
+
+      <h3>Flow diagram</h3>
+      <ol>
+        <li>Client calls <code>GET /auth/v1/keypair</code> → receives a one-time nonce (60s TTL)</li>
+        <li>Client signs the nonce with its Ed25519 private key</li>
+        <li>Client posts <code>&#123; pubkey, nonce, signature &#125;</code> to <code>POST /auth/v1/keypair</code></li>
+        <li>Server verifies signature with <code>crypto.subtle.verify("Ed25519", ...)</code></li>
+        <li>Server finds or creates user by pubkey, issues 7-day session</li>
+        <li>User can later add an email/password to their account</li>
+      </ol>
+
+<pre><code class="language-typescript">import BB from "busybase";
+const db = BB("http://localhost:54321", "local");
+
+// ── Anonymous sign-in (auto-generates keypair on first call) ──
+const { data, error } = await db.auth.keypair.signIn();
+console.log(data.user.id);          // persistent UUID
+console.log(data.session.access_token);
+
+// ── Backup your keypair ──
+const keys = db.auth.keypair.export();
+// Save keys.privkey + keys.pubkey somewhere safe
+
+// ── Restore on a new device ──
+const { data: restored } = await db.auth.keypair.restore(
+  keys.privkey,
+  keys.pubkey
+);
+// restored.user.id === original user.id ✓
+
+// ── Generate a fresh keypair manually ──
+const kp = await db.auth.keypair.generate();
+// kp.privkey, kp.pubkey (base64)
+
+// ── Remove local keys (soft logout — can restore later) ──
+db.auth.keypair.forget();</code></pre>
+
+      <h3>Upgrading to email/password</h3>
+      <p>After signing in with a keypair, users can add an email and password to their account without losing their data:</p>
+<pre><code class="language-typescript">// Must be signed in with keypair first
+await db.auth.updateUser({
+  email: "user@example.com",
+  password: "securepassword",
+  data: { name: "Alice" }
+});
+// Same user.id, now has email too</code></pre>
+    </div>
+
+    <!-- ── Email Auth ── -->
+    <div class="doc-section" id="email-auth">
+      <h2>Email / Password Auth</h2>
+
+<pre><code class="language-typescript">// ── Sign up ──
+const { data, error } = await db.auth.signUp({
+  email: "user@example.com",
+  password: "mypassword",
+  options: {
+    data: { name: "Alice", plan: "free" }  // stored as user_metadata
+  }
+});
+// data.user.id, data.user.email, data.user.user_metadata
+
+// ── Sign in ──
+const { data: { user, session } } = await db.auth.signInWithPassword({
+  email: "user@example.com",
+  password: "mypassword"
+});
+// session.access_token — use in Authorization header
+// session.expires_in === 604800 (7 days)
+
+// ── Get current user ──
+const { data: { user } } = await db.auth.getUser();
+
+// ── Update user ──
+await db.auth.updateUser({
+  email: "new@example.com",   // triggers onEmailChange hook
+  password: "newpassword",
+  data: { name: "Alice B." }  // merged into user_metadata
+});
+
+// ── Sign out ──
+await db.auth.signOut();  // invalidates session token on server</code></pre>
+
+      <h3>User object shape</h3>
+<pre><code class="language-typescript">interface User {
+  id: string;                        // UUID
+  email: string | null;
+  role: "authenticated";
+  user_metadata: Record&lt;string, any&gt;; // from signup options.data
+  app_metadata: Record&lt;string, any&gt;;  // admin-managed metadata
+  identities: [];
+  aud: "authenticated";
+  created_at: string;                 // ISO 8601
+  updated_at: string;
+  last_sign_in_at: string;
+  email_confirmed_at: string | null;
+}</code></pre>
+    </div>
+
+    <!-- ── Sessions ── -->
+    <div class="doc-section" id="sessions">
+      <h2>Sessions</h2>
+      <p>Sessions are UUID tokens stored in the <code>_sessions</code> LanceDB table. They expire after 7 days.</p>
+
+<pre><code class="language-typescript">// ── Get current session (local, no network call) ──
+const { data: { session } } = await db.auth.getSession();
+// session.access_token
+// session.refresh_token
+// session.expires_in  === 604800
+// session.expires_at  === Unix timestamp
+// session.token_type  === "bearer"
+
+// ── Auth state listener ──
+const { data: { subscription } } = db.auth.onAuthStateChange((event, session) => {
+  console.log(event);  // "INITIAL_SESSION" | "SIGNED_IN" | "SIGNED_OUT" | "USER_UPDATED"
+  console.log(session?.access_token);
+});
+
+// Unsubscribe
+subscription.unsubscribe();
+
+// ── Manually set session (e.g. from server-side rendering) ──
+await db.auth.setSession({
+  access_token: "...",
+  refresh_token: "..."
+});</code></pre>
+
+      <div class="callout info">
+        <div class="callout-title">Authorization header</div>
+        All REST API requests requiring auth must include <code>Authorization: Bearer &lt;access_token&gt;</code>. The SDK sets this automatically after sign-in.
+      </div>
+    </div>
+
+    <!-- ── Password Reset ── -->
+    <div class="doc-section" id="password-reset">
+      <h2>Password Reset</h2>
+      <p>BusyBase supports email-based password reset. A signed reset token is sent via SMTP (or your custom <code>sendEmail</code> hook). Reset tokens expire in 1 hour.</p>
+
+<pre><code class="language-bash"># 1. Request reset (POST /auth/v1/recover)
+curl -X POST http://localhost:54321/auth/v1/recover \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com"}'
+# Always returns { data: {}, error: null } (no email leak)</code></pre>
+
+<pre><code class="language-bash"># 2. User clicks link: GET /auth/v1/verify?token=&lt;TOKEN&gt;&type=recovery
+# On your page, collect new password, then:
+
+# 3. Verify token + set new password (POST /auth/v1/verify)
+curl -X POST http://localhost:54321/auth/v1/verify \
+  -H "Content-Type: application/json" \
+  -d '{"token":"&lt;TOKEN&gt;","type":"recovery","password":"newpassword"}'
+# Returns { data: { user, session }, error: null }</code></pre>
+
+      <div class="callout tip">
+        <div class="callout-title">Custom reset email</div>
+        Use the <a href="#hooks"><code>onPasswordReset</code></a> hook to customize the reset email, or the <code>sendEmail</code> hook to use a different email provider entirely.
+      </div>
+    </div>
+
+    <!-- ── Vector Search ── -->
+    <div class="doc-section" id="vector-search">
+      <h2>Vector Search</h2>
+      <p>Every table can store a <code>vector</code> field alongside regular data. BusyBase uses LanceDB's ANN (Approximate Nearest Neighbor) search to find similar rows. Rows without a vector get a transparent sentinel <code>[0]</code> and are excluded from vector queries.</p>
+
+      <h3>Insert with vectors</h3>
+<pre><code class="language-typescript">// Insert rows with a "vector" field
+await db.from("articles").insert([
+  { title: "Cats",   topic: "pets",  vector: [0.9, 0.1, 0.0, 0.0] },
+  { title: "Dogs",   topic: "pets",  vector: [0.1, 0.9, 0.0, 0.0] },
+  { title: "Python", topic: "code",  vector: [0.0, 0.0, 0.9, 0.1] },
+  { title: "Rust",   topic: "code",  vector: [0.0, 0.0, 0.1, 0.9] },
+]);
+
+// Mixed tables are fine — non-vector rows just won't appear in .vec() results
+await db.from("articles").insert({ title: "No vector here", body: "..." });</code></pre>
+
+      <h3>Vector search</h3>
+<pre><code class="language-typescript">// .vec(embedding, limit) — sorted by cosine similarity
+const { data } = await db.from("articles").select("*").vec([0.85, 0.15, 0.0, 0.0], 3);
+// data[0].title === "Cats"       (_distance ~0.01)
+// data[1].title === "Dogs"       (_distance ~0.15)
+// data[2].title === "Python"     (_distance ~0.95)
+
+// Each result includes _distance — lower = more similar
+console.log(data[0]._distance);  // number</code></pre>
+
+      <h3>Combine with filters</h3>
+<pre><code class="language-typescript">// Vector search with topic filter
+const { data } = await db.from("articles")
+  .select("title,topic")
+  .vec([0.85, 0.15, 0.0, 0.0], 5)
+  .eq("topic", "pets");
+// Only returns pet-related articles, sorted by similarity</code></pre>
+
+      <h3>Using real embeddings (OpenAI)</h3>
+<pre><code class="language-typescript">import OpenAI from "openai";
+const openai = new OpenAI();
+
+// Generate and store embedding
+const text = "How to train a golden retriever";
+const resp = await openai.embeddings.create({
+  model: "text-embedding-3-small",
+  input: text,
+});
+const embedding = resp.data[0].embedding; // 1536-dimensional float array
+
+await db.from("knowledge").insert({
+  text,
+  source: "guide.pdf",
+  vector: embedding,
+});
+
+// Search by semantic similarity
+const query = "tips for dog training";
+const qResp = await openai.embeddings.create({
+  model: "text-embedding-3-small",
+  input: query,
+});
+const { data: results } = await db.from("knowledge")
+  .select("text,source")
+  .vec(qResp.data[0].embedding, 5);
+// results[0] is the most semantically similar document</code></pre>
+
+      <h3>REST API for vector search</h3>
+<pre><code class="language-bash"># GET /rest/v1/:table?vec=[...]&limit=5
+curl "http://localhost:54321/rest/v1/articles?vec=%5B0.9%2C0.1%2C0.0%2C0.0%5D&limit=3"
+# Returns sorted by _distance ascending</code></pre>
+    </div>
+
+    <!-- ── Hooks System ── -->
+    <div class="doc-section" id="hooks">
+      <h2>Hooks System</h2>
+      <p>BusyBase loads a hooks file at startup. Point <code>BUSYBASE_HOOKS</code> to a TypeScript (or JS) file that exports hook functions. Every hook is optional.</p>
+
+<pre><code class="language-bash">BUSYBASE_HOOKS=./hooks.ts bunx busybase serve</code></pre>
+
+      <div class="callout info">
+        <div class="callout-title">Return values</div>
+        <ul style="margin:0.5rem 0 0;padding-left:1.25rem;">
+          <li>Return <strong>nothing / <code>void</code></strong> → operation proceeds normally</li>
+          <li>Return <strong><code>&#123; error: "message" &#125;</code></strong> or <strong><code>false</code></strong> → operation aborted, error returned to client</li>
+          <li>Return <strong>a value</strong> from pipe hooks (<code>beforeSelect</code>, <code>afterSelect</code>, <code>afterInsert</code>, <code>afterUpdate</code>) → value replaces the original rows/params</li>
+          <li>Throw an error → error message returned to client</li>
+        </ul>
+      </div>
+
+      <h3>All hooks</h3>
+
+      <!-- Auth hooks -->
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">onSignup</span>
+          <span class="hook-category cat-auth">auth</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">onSignup?(user: HookUser): any</div>
+          <div class="hook-desc">Called after a new user is created — either via email signup or first keypair sign-in. Return <code>&#123; error &#125;</code> to reject the signup and delete the user.</div>
+<pre><code class="language-typescript">export const onSignup = async (user) => {
+  await sendWelcomeEmail(user.email);
+  await db.from("profiles").insert({ user_id: user.id, plan: "free" });
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">onSignin</span>
+          <span class="hook-category cat-auth">auth</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">onSignin?(user: HookUser): any</div>
+          <div class="hook-desc">Called after a successful sign-in (email/password or keypair). Return <code>&#123; error &#125;</code> to reject the sign-in.</div>
+<pre><code class="language-typescript">export const onSignin = async (user) => {
+  console.log(`[audit] user signed in: ${user.id}`);
+  // Update login count, check ban status, etc.
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">onSignout</span>
+          <span class="hook-category cat-auth">auth</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">onSignout?(user: HookUser): any</div>
+          <div class="hook-desc">Called when a user signs out. The session has already been deleted from the database at this point.</div>
+<pre><code class="language-typescript">export const onSignout = async (user) => {
+  console.log(`[audit] user signed out: ${user.id}`);
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">onEmailChange</span>
+          <span class="hook-category cat-auth">auth</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">onEmailChange?(user: HookUser, newEmail: string): any</div>
+          <div class="hook-desc">Called when a user updates their email address. Return <code>&#123; error &#125;</code> to reject the change. <code>user</code> still has the old email.</div>
+<pre><code class="language-typescript">export const onEmailChange = async (user, newEmail) => {
+  if (newEmail.endsWith("@banned.com"))
+    return { error: "Email domain not allowed" };
+  // Send verification email, etc.
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">onPasswordReset</span>
+          <span class="hook-category cat-auth">auth</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">onPasswordReset?(email: string, token: string): any</div>
+          <div class="hook-desc">Called when a password reset is requested. If this hook is defined, BusyBase will NOT send the built-in SMTP email — you're responsible for sending the email. Use <code>token</code> to build your reset link.</div>
+<pre><code class="language-typescript">export const onPasswordReset = async (email, token) => {
+  const url = `https://myapp.com/reset?token=${token}`;
+  await resend.emails.send({
+    from: "noreply@myapp.com",
+    to: email,
+    subject: "Reset your password",
+    html: `&lt;a href="${url}"&gt;Click to reset&lt;/a&gt; — expires in 1 hour.`,
+  });
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">onUserUpdate</span>
+          <span class="hook-category cat-auth">auth</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">onUserUpdate?(user: HookUser, changes: Record&lt;string, any&gt;): any</div>
+          <div class="hook-desc">Called when user metadata is updated via <code>PATCH /auth/v1/update</code>.</div>
+<pre><code class="language-typescript">export const onUserUpdate = async (user, changes) => {
+  await analytics.track("user_updated", { userId: user.id, ...changes });
+};</code></pre>
+        </div>
+      </div>
+
+      <!-- Request middleware -->
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">onRequest</span>
+          <span class="hook-category cat-req">middleware</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">onRequest?(req: Request): Response | void | Promise&lt;Response | void&gt;</div>
+          <div class="hook-desc">Global request middleware — runs before every request. Return a <code>Response</code> to short-circuit (bypass the rest of BusyBase). Return nothing to let the request proceed normally.</div>
+<pre><code class="language-typescript">export const onRequest = async (req) => {
+  const origin = req.headers.get("Origin") || "";
+  if (!origin.includes("myapp.com") && req.method !== "OPTIONS")
+    return new Response("Forbidden", { status: 403 });
+
+  // Rate limiting, logging, auth checks, etc.
+  console.log(`[req] ${req.method} ${new URL(req.url).pathname}`);
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">canAccess</span>
+          <span class="hook-category cat-req">access control</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">canAccess?(opts: &#123; user: HookUser | null; table: string; method: string &#125;): any</div>
+          <div class="hook-desc">Row-level access control — called before every <code>/rest/v1/</code> request. <code>user</code> is <code>null</code> for unauthenticated requests. Return <code>&#123; error &#125;</code> or <code>false</code> to deny. Return nothing to allow.</div>
+<pre><code class="language-typescript">export const canAccess = ({ user, table, method }) => {
+  // Require auth for all writes
+  if (!user && method !== "GET")
+    return { error: "Authentication required" };
+
+  // Only admins can access _admin tables
+  if (table.startsWith("_admin") && user?.role !== "admin")
+    return { error: "Admin access required" };
+
+  // Users can only access their own data
+  // (combine with beforeSelect to add user_id filter)
+};</code></pre>
+        </div>
+      </div>
+
+      <!-- Data hooks -->
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">beforeInsert</span>
+          <span class="hook-category cat-data">data</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">beforeInsert?(table: string, rows: any[]): any</div>
+          <div class="hook-desc">Called before rows are inserted. Mutate <code>rows</code> directly to transform data, or return <code>&#123; error &#125;</code> to abort.</div>
+<pre><code class="language-typescript">export const beforeInsert = (table, rows) => {
+  if (table === "comments") {
+    rows.forEach(r => {
+      r.created_at = new Date().toISOString();
+      r.content = sanitize(r.content);  // XSS prevention
+    });
+  }
+  if (table === "orders" && rows.some(r => r.amount < 0))
+    return { error: "Amount must be positive" };
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">afterInsert</span>
+          <span class="hook-category cat-data">data</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">afterInsert?(table: string, rows: any[]): any</div>
+          <div class="hook-desc">Pipe hook — called after rows are inserted. Return modified rows to replace what gets stored and returned to the client, or return nothing to pass through.</div>
+<pre><code class="language-typescript">export const afterInsert = async (table, rows) => {
+  if (table === "orders") {
+    await notifyFulfillment(rows);
+    // Return rows as-is (or return modified rows)
+  }
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">beforeUpdate</span>
+          <span class="hook-category cat-data">data</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">beforeUpdate?(table: string, rows: any[], changes: any): any</div>
+          <div class="hook-desc">Called before rows are updated. <code>rows</code> is the existing data, <code>changes</code> is the incoming patch. Return <code>&#123; error &#125;</code> to abort.</div>
+<pre><code class="language-typescript">export const beforeUpdate = (table, rows, changes) => {
+  if (table === "posts" && changes.published && rows.some(r => !r.title))
+    return { error: "Cannot publish post without a title" };
+  changes.updated_at = new Date().toISOString();
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">afterUpdate</span>
+          <span class="hook-category cat-data">data</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">afterUpdate?(table: string, rows: any[]): any</div>
+          <div class="hook-desc">Pipe hook — called after rows are updated. Return modified rows to change what's returned to the client.</div>
+<pre><code class="language-typescript">export const afterUpdate = async (table, rows) => {
+  if (table === "users") {
+    await invalidateCache(rows.map(r => r.id));
+  }
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">beforeDelete</span>
+          <span class="hook-category cat-data">data</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">beforeDelete?(table: string, rows: any[]): any</div>
+          <div class="hook-desc">Called before rows are deleted. <code>rows</code> contains the rows about to be deleted. Return <code>&#123; error &#125;</code> to abort.</div>
+<pre><code class="language-typescript">export const beforeDelete = (table, rows) => {
+  if (table === "users" && rows.some(r => r.role === "admin"))
+    return { error: "Cannot delete admin users" };
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">afterDelete</span>
+          <span class="hook-category cat-data">data</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">afterDelete?(table: string, rows: any[]): any</div>
+          <div class="hook-desc">Called after rows are deleted. <code>rows</code> contains the deleted rows for cleanup/audit.</div>
+<pre><code class="language-typescript">export const afterDelete = async (table, rows) => {
+  if (table === "uploads") {
+    await Promise.all(rows.map(r => storage.delete(r.file_key)));
+  }
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">beforeSelect</span>
+          <span class="hook-category cat-data">data</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">beforeSelect?(table: string, params: Record&lt;string, string&gt;): any</div>
+          <div class="hook-desc">Pipe hook — called before a query executes with the raw query parameters. Return modified params to change the query (e.g. inject user_id filter for row-level security).</div>
+<pre><code class="language-typescript">export const beforeSelect = (table, params) => {
+  // Inject user_id filter for user-owned tables
+  const ownedTables = ["notes", "todos", "files"];
+  if (ownedTables.includes(table) && currentUserId) {
+    return { ...params, "eq.user_id": currentUserId };
+  }
+};</code></pre>
+        </div>
+      </div>
+
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">afterSelect</span>
+          <span class="hook-category cat-data">data</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">afterSelect?(table: string, rows: any[]): any</div>
+          <div class="hook-desc">Pipe hook — called after rows are fetched. Return modified rows to filter/transform what the client receives.</div>
+<pre><code class="language-typescript">export const afterSelect = (table, rows) => {
+  if (table === "products") {
+    // Remove internal cost fields
+    return rows.map(({ internal_cost, ...r }) => r);
+  }
+};</code></pre>
+        </div>
+      </div>
+
+      <!-- Email hook -->
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">sendEmail</span>
+          <span class="hook-category cat-email">email</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">sendEmail?(opts: &#123; to: string; subject: string; html: string; text?: string &#125;): any</div>
+          <div class="hook-desc">Override BusyBase's built-in SMTP email transport entirely. If defined, this hook is called for ALL emails (password resets, etc.) instead of the SMTP implementation. Use any email provider you want.</div>
+<pre><code class="language-typescript">import { Resend } from "resend";
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+export const sendEmail = async ({ to, subject, html }) => {
+  await resend.emails.send({
+    from: "BusyBase &lt;noreply@myapp.com&gt;",
+    to, subject, html,
+  });
+};</code></pre>
+        </div>
+      </div>
+
+      <!-- Session hook -->
+      <div class="hook-card">
+        <div class="hook-header">
+          <span class="hook-name">onIssueSession</span>
+          <span class="hook-category cat-session">session</span>
+        </div>
+        <div class="hook-body">
+          <div class="hook-sig">onIssueSession?(user: HookUser): Record&lt;string, any&gt; | void | Promise&lt;Record&lt;string, any&gt; | void&gt;</div>
+          <div class="hook-desc">Called when a new session is created. Return an object to merge custom claims into the session payload.</div>
+<pre><code class="language-typescript">export const onIssueSession = async (user) => {
+  const profile = await getProfile(user.id);
+  return {
+    plan: profile.plan,
+    org_id: profile.org_id,
+  };
+};</code></pre>
+        </div>
+      </div>
+
+      <h3>HookUser type</h3>
+<pre><code class="language-typescript">interface HookUser {
+  id: string;
+  email: string | null;
+  role: string;
+  user_metadata: Record&lt;string, any&gt;;
+  app_metadata: Record&lt;string, any&gt;;
+  created_at: string;
+}</code></pre>
+
+      <h3>Full hooks.ts template</h3>
+<pre><code class="language-typescript">// hooks.ts — set BUSYBASE_HOOKS=./hooks.ts
+import type { Hooks } from "busybase/hooks";
+
+export const onSignup: Hooks["onSignup"] = async (user) => {
+  console.log("New user:", user.id);
+};
+
+export const onSignin: Hooks["onSignin"] = async (user) => {};
+
+export const onSignout: Hooks["onSignout"] = async (user) => {};
+
+export const onEmailChange: Hooks["onEmailChange"] = async (user, newEmail) => {
+  // return { error: "..." } to reject
+};
+
+export const onPasswordReset: Hooks["onPasswordReset"] = async (email, token) => {
+  // Send your own email — if defined, built-in SMTP is skipped
+};
+
+export const onUserUpdate: Hooks["onUserUpdate"] = async (user, changes) => {};
+
+export const onRequest: Hooks["onRequest"] = async (req) => {
+  // Return a Response to short-circuit, or nothing to continue
+};
+
+export const canAccess: Hooks["canAccess"] = ({ user, table, method }) => {
+  // Return { error: "..." } or false to deny
+};
+
+export const beforeInsert: Hooks["beforeInsert"] = (table, rows) => {};
+export const afterInsert:  Hooks["afterInsert"]  = (table, rows) => {};
+export const beforeUpdate: Hooks["beforeUpdate"] = (table, rows, changes) => {};
+export const afterUpdate:  Hooks["afterUpdate"]  = (table, rows) => {};
+export const beforeDelete: Hooks["beforeDelete"] = (table, rows) => {};
+export const afterDelete:  Hooks["afterDelete"]  = (table, rows) => {};
+export const beforeSelect: Hooks["beforeSelect"] = (table, params) => {};
+export const afterSelect:  Hooks["afterSelect"]  = (table, rows) => {};
+
+export const sendEmail: Hooks["sendEmail"] = async ({ to, subject, html }) => {};
+
+export const onIssueSession: Hooks["onIssueSession"] = async (user) => {};</code></pre>
+    </div>
+
+    <!-- ── Email / SMTP ── -->
+    <div class="doc-section" id="email-smtp">
+      <h2>Email / SMTP</h2>
+      <p>BusyBase includes a built-in SMTP client (using Bun TCP, zero dependencies) for sending password reset emails. Configure it with environment variables.</p>
+
+<pre><code class="language-bash">BUSYBASE_SMTP_HOST=smtp.resend.com
+BUSYBASE_SMTP_PORT=587
+BUSYBASE_SMTP_USER=resend
+BUSYBASE_SMTP_PASS=re_your_secret_key
+BUSYBASE_SMTP_FROM=noreply@myapp.com</code></pre>
+
+      <div class="callout tip">
+        <div class="callout-title">Prefer a third-party provider?</div>
+        Use the <code>sendEmail</code> hook to route emails through Resend, SendGrid, AWS SES, Postmark, or any other provider. The hook completely replaces the SMTP transport.
+      </div>
+
+      <p>If no SMTP is configured and no <code>sendEmail</code> hook is set, BusyBase logs the email to stdout:</p>
+<pre><code class="language-bash">[BusyBase] No email transport configured. Would send to user@example.com: Reset your password</code></pre>
+    </div>
+
+    <!-- ── SDK Reference ── -->
+    <div class="doc-section" id="sdk">
+      <h2>SDK Reference</h2>
+      <p>The BusyBase SDK mirrors the Supabase JS client v2 API. Import and initialize:</p>
+
+<pre><code class="language-typescript">import BB from "busybase";
+// or: import { createClient } from "busybase";
+// or: const BB = require("busybase");
+
+const db = BB("http://localhost:54321", "your-api-key");
+// db.from(table)
+// db.auth</code></pre>
+
+      <p>All methods return <code>Promise&lt;&#123; data: T | null, error: Error | null &#125;&gt;</code>.</p>
+    </div>
+
+    <div class="doc-section" id="sdk-auth">
+      <h2>auth.*</h2>
+
+      <h4>auth.keypair.signIn(privkeyB64?)</h4>
+      <p>Sign in anonymously with a keypair. On first call (no stored keypair), generates a new Ed25519 keypair, persists it in <code>localStorage</code> (browser) or memory (server), and creates a new user. Subsequent calls reuse the stored keypair.</p>
+      <p>Pass a <code>privkeyB64</code> string to sign in with a specific private key (must have been previously stored with its pubkey).</p>
+
+      <h4>auth.keypair.restore(privkey, pubkey)</h4>
+      <p>Restore from a saved backup. Sets the keypair in storage and calls <code>signIn</code>. Returns the same user as the original keypair.</p>
+
+      <h4>auth.keypair.generate()</h4>
+      <p>Generate a new Ed25519 keypair without signing in. Returns <code>&#123; privkey: string, pubkey: string &#125;</code> (base64 encoded).</p>
+
+      <h4>auth.keypair.export()</h4>
+      <p>Returns the current keypair from storage: <code>&#123; privkey: string | null, pubkey: string | null &#125;</code>. Save these for account recovery.</p>
+
+      <h4>auth.keypair.forget()</h4>
+      <p>Remove the keypair from local storage. The account still exists on the server — restore it later with <code>auth.keypair.restore()</code>.</p>
+
+      <h4>auth.signUp(&#123; email, password, options? &#125;)</h4>
+      <p>Register a new user with email + password. <code>options.data</code> is stored as <code>user_metadata</code>. Returns <code>&#123; data: &#123; user, session: null &#125;, error &#125;</code> — no auto sign-in.</p>
+
+      <h4>auth.signInWithPassword(&#123; email, password &#125;)</h4>
+      <p>Sign in with email + password. Returns <code>&#123; data: &#123; user, session &#125;, error &#125;</code>.</p>
+
+      <h4>auth.signOut()</h4>
+      <p>Sign out and invalidate the current session token on the server.</p>
+
+      <h4>auth.getUser()</h4>
+      <p>Fetch the current user from the server (requires valid session token). Returns <code>&#123; data: &#123; user &#125;, error &#125;</code>.</p>
+
+      <h4>auth.getSession()</h4>
+      <p>Return the current in-memory session object (no network call). Returns <code>&#123; data: &#123; session &#125;, error: null &#125;</code>.</p>
+
+      <h4>auth.updateUser(&#123; email?, password?, data? &#125;)</h4>
+      <p>Update the current user's email, password, or metadata. <code>data</code> is merged (not replaced) into <code>user_metadata</code>.</p>
+
+      <h4>auth.setSession(&#123; access_token, refresh_token &#125;)</h4>
+      <p>Manually set the session (e.g. from SSR). The SDK will use this token for all subsequent requests.</p>
+
+      <h4>auth.onAuthStateChange(callback)</h4>
+      <p>Subscribe to auth state changes. The callback fires immediately with <code>INITIAL_SESSION</code>, then on sign-in, sign-out, and user updates. Returns <code>&#123; data: &#123; subscription: &#123; unsubscribe() &#125; &#125; &#125;</code>.</p>
+
+<pre><code class="language-typescript">const { data: { subscription } } = db.auth.onAuthStateChange((event, session) => {
+  // event: "INITIAL_SESSION" | "SIGNED_IN" | "SIGNED_OUT" | "USER_UPDATED"
+});
+subscription.unsubscribe();</code></pre>
+    </div>
+
+    <div class="doc-section" id="sdk-from">
+      <h2>from().*</h2>
+
+      <h4>from(table).select(columns?)</h4>
+      <p>Start a SELECT query. <code>columns</code> is a comma-separated string (default: <code>"*"</code>). Chain filters and modifiers, then <code>await</code> to execute.</p>
+<pre><code class="language-typescript">const { data } = await db.from("todos").select("id,title,done");</code></pre>
+
+      <h4>from(table).insert(data)</h4>
+      <p>Insert one or more rows. <code>data</code> can be an object or array. <code>id</code> is auto-generated as a UUID if not provided. Tables are created automatically on first insert.</p>
+<pre><code class="language-typescript">const { data } = await db.from("todos").insert({ title: "Buy milk" });
+await db.from("todos").insert([{ title: "A" }, { title: "B" }]);</code></pre>
+
+      <h4>from(table).update(data)</h4>
+      <p>Update rows matching a filter. Must chain at least one filter method. Returns updated rows.</p>
+<pre><code class="language-typescript">const { data } = await db.from("todos").update({ done: true }).eq("id", "abc");</code></pre>
+
+      <h4>from(table).upsert(data)</h4>
+      <p>Alias for <code>insert</code> in BusyBase (LanceDB doesn't support true upsert at the SQL level).</p>
+
+      <h4>from(table).delete()</h4>
+      <p>Delete rows matching a filter. Must chain at least one filter method.</p>
+<pre><code class="language-typescript">await db.from("todos").delete().eq("done", true);</code></pre>
+    </div>
+
+    <div class="doc-section" id="sdk-filters">
+      <h2>Filters</h2>
+      <p>Chain filter methods onto any query. Multiple filters are ANDed together.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Method</th><th>SQL equivalent</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td><code>.eq(col, val)</code></td><td><code>col = val</code></td><td><code>.eq("done", false)</code></td></tr>
+            <tr><td><code>.neq(col, val)</code></td><td><code>col != val</code></td><td><code>.neq("status", "draft")</code></td></tr>
+            <tr><td><code>.gt(col, val)</code></td><td><code>col > val</code></td><td><code>.gt("score", 80)</code></td></tr>
+            <tr><td><code>.gte(col, val)</code></td><td><code>col >= val</code></td><td><code>.gte("score", 80)</code></td></tr>
+            <tr><td><code>.lt(col, val)</code></td><td><code>col &lt; val</code></td><td><code>.lt("price", 100)</code></td></tr>
+            <tr><td><code>.lte(col, val)</code></td><td><code>col &lt;= val</code></td><td><code>.lte("price", 100)</code></td></tr>
+            <tr><td><code>.like(col, val)</code></td><td><code>col LIKE '%val%'</code></td><td><code>.like("name", "ali")</code></td></tr>
+            <tr><td><code>.ilike(col, val)</code></td><td><code>col LIKE '%val%'</code> (case-insensitive)</td><td><code>.ilike("name", "ali")</code></td></tr>
+            <tr><td><code>.is(col, val)</code></td><td><code>col IS val</code></td><td><code>.is("deleted", null)</code></td></tr>
+            <tr><td><code>.in(col, vals[])</code></td><td><code>col IN (a, b, c)</code></td><td><code>.in("status", ["active","pending"])</code></td></tr>
+            <tr><td><code>.not(col, op, val)</code></td><td><code>NOT col op val</code></td><td><code>.not("role", "eq", "admin")</code></td></tr>
+            <tr><td><code>.or(clause)</code></td><td><code>col1 = a OR col2 = b</code></td><td><code>.or("role.eq.admin,role.eq.mod")</code></td></tr>
+            <tr><td><code>.filter(col, op, val)</code></td><td>generic filter</td><td><code>.filter("score", "gt", 50)</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="doc-section" id="sdk-modifiers">
+      <h2>Modifiers</h2>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Method</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>.order(col, &#123; ascending &#125;)</code></td><td>Sort results. <code>ascending</code> defaults to <code>true</code>.</td></tr>
+            <tr><td><code>.limit(n)</code></td><td>Return at most <code>n</code> rows (default: 1000)</td></tr>
+            <tr><td><code>.offset(n)</code></td><td>Skip <code>n</code> rows</td></tr>
+            <tr><td><code>.range(from, to)</code></td><td>Return rows from index <code>from</code> to <code>to</code> inclusive</td></tr>
+            <tr><td><code>.count("exact")</code></td><td>Include <code>count</code> in response and <code>Content-Range</code> header</td></tr>
+            <tr><td><code>.single()</code></td><td>Expect exactly one row — returns object (not array). Error if 0 or multiple rows.</td></tr>
+            <tr><td><code>.maybeSingle()</code></td><td>Return first row as object, or <code>null</code> if no rows. No error on empty.</td></tr>
+            <tr><td><code>.select(cols)</code></td><td>Override column selection on a query chain</td></tr>
+            <tr><td><code>.vec(embedding, limit)</code></td><td>Vector similarity search — returns rows sorted by <code>_distance</code> ascending</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+<pre><code class="language-typescript">// Pagination example
+const PAGE_SIZE = 20;
+const page = 2;
+const { data, count } = await db.from("posts")
+  .select("id,title,created_at")
+  .eq("published", true)
+  .order("created_at", { ascending: false })
+  .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
+  .count("exact");
+// count = total rows matching filter
+// data = 20 rows for page 2</code></pre>
+    </div>
+
+    <!-- ── CLI Reference ── -->
+    <div class="doc-section" id="cli">
+      <h2>CLI Reference</h2>
+      <p>The BusyBase CLI uses the same SDK client for all operations — making it a first-class test runner and operational tool.</p>
+
+      <h3>busybase serve</h3>
+      <p>Start the HTTP server. Reads <code>BUSYBASE_PORT</code>, <code>BUSYBASE_DIR</code>, <code>BUSYBASE_HOOKS</code>.</p>
+<pre><code class="language-bash">busybase serve
+BUSYBASE_PORT=8080 BUSYBASE_DIR=./data BUSYBASE_HOOKS=./hooks.ts busybase serve</code></pre>
+
+      <h3>busybase test</h3>
+      <p>Run the full SDK end-to-end test suite against a live server. Tests all auth flows, CRUD, filters, modifiers, vector search, and HTTP compatibility headers.</p>
+<pre><code class="language-bash">busybase test
+BUSYBASE_URL=http://localhost:54321 busybase test</code></pre>
+
+      <h3>busybase signup &lt;email&gt; &lt;password&gt;</h3>
+<pre><code class="language-bash">busybase signup user@example.com mypassword
+# → { data: { user: {...}, session: null }, error: null }</code></pre>
+
+      <h3>busybase signin &lt;email&gt; &lt;password&gt;</h3>
+<pre><code class="language-bash">busybase signin user@example.com mypassword
+# → { data: { user: {...}, session: { access_token: "..." } }, error: null }</code></pre>
+
+      <h3>busybase user</h3>
+<pre><code class="language-bash">busybase user
+# → { data: { user: {...} }, error: null }</code></pre>
+
+      <h3>busybase insert &lt;table&gt; &lt;json&gt;</h3>
+<pre><code class="language-bash">busybase insert todos '{"title":"Buy milk","done":false}'
+busybase insert todos '[{"title":"A"},{"title":"B"}]'</code></pre>
+
+      <h3>busybase query &lt;table&gt; [col=val ...]</h3>
+<pre><code class="language-bash">busybase query todos
+busybase query todos done=false
+busybase query todos done=false status=active</code></pre>
+
+      <h3>busybase update &lt;table&gt; &lt;json&gt; [col=val ...]</h3>
+<pre><code class="language-bash">busybase update todos '{"done":true}' title=Buy\ milk</code></pre>
+
+      <h3>busybase delete &lt;table&gt; &lt;col=val&gt; ...</h3>
+<pre><code class="language-bash">busybase delete todos done=true
+busybase delete todos title=Buy\ milk</code></pre>
+
+      <h3>busybase vec &lt;table&gt; &lt;json-vec&gt; [limit]</h3>
+<pre><code class="language-bash">busybase vec articles '[0.9,0.1,0.0,0.0]' 5
+# → sorted by _distance, top 5 results</code></pre>
+    </div>
+
+    <!-- ── Self-hosting ── -->
+    <div class="doc-section" id="self-hosting">
+      <h2>Self-Hosting</h2>
+
+      <h3>Requirements</h3>
+      <ul>
+        <li>Bun v1.0+ (for running from source)</li>
+        <li>Or: no requirements (standalone binary)</li>
+        <li>~50MB disk for the binary</li>
+        <li>Data directory writable by the process</li>
+      </ul>
+
+      <h3>Production with Bun</h3>
+<pre><code class="language-bash"># Run in production
+BUSYBASE_PORT=8080 \
+BUSYBASE_DIR=/var/data/busybase \
+BUSYBASE_URL=https://api.myapp.com \
+BUSYBASE_HOOKS=./hooks.ts \
+bunx busybase serve</code></pre>
+
+      <h3>systemd service</h3>
+<pre><code class="language-bash"># /etc/systemd/system/busybase.service
+[Unit]
+Description=BusyBase
+After=network.target
+
+[Service]
+Type=simple
+User=busybase
+WorkingDirectory=/opt/busybase
+ExecStart=/usr/local/bin/busybase-linux-x64 serve
+Restart=on-failure
+Environment=BUSYBASE_PORT=8080
+Environment=BUSYBASE_DIR=/var/data/busybase
+Environment=BUSYBASE_URL=https://api.myapp.com
+Environment=BUSYBASE_HOOKS=/opt/busybase/hooks.ts
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+<pre><code class="language-bash">systemctl enable busybase && systemctl start busybase</code></pre>
+
+      <h3>Reverse proxy (nginx)</h3>
+<pre><code class="language-bash">server {
+    listen 443 ssl;
+    server_name api.myapp.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}</code></pre>
+
+      <h3>Backup</h3>
+      <p>BusyBase data is plain files in <code>BUSYBASE_DIR</code>. Back it up with:</p>
+<pre><code class="language-bash">cp -r /var/data/busybase /backup/busybase-$(date +%Y%m%d)
+# Or use rsync, rclone, etc.</code></pre>
+    </div>
+
+    <!-- ── Standalone Binary ── -->
+    <div class="doc-section" id="binary">
+      <h2>Standalone Binary</h2>
+      <p>Every push to <code>master</code> builds self-contained executables via GitHub Actions + <code>bun build --compile</code>. No runtime, no Node.js, no Bun needed on the target machine.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Platform</th><th>Binary</th></tr></thead>
+          <tbody>
+            <tr><td>Linux x64</td><td><code>busybase-linux-x64</code></td></tr>
+            <tr><td>macOS ARM64 (Apple Silicon)</td><td><code>busybase-macos-arm64</code></td></tr>
+            <tr><td>Windows x64</td><td><code>busybase-windows-x64.exe</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Download from <a href="https://github.com/AnEntrypoint/busybase/releases" target="_blank" rel="noopener">GitHub Releases</a>.</p>
+
+<pre><code class="language-bash"># Quick deploy on a fresh Linux server
+wget https://github.com/AnEntrypoint/busybase/releases/latest/download/busybase-linux-x64
+chmod +x busybase-linux-x64
+BUSYBASE_PORT=8080 ./busybase-linux-x64 serve</code></pre>
+    </div>
+
+    <!-- ── Examples ── -->
+    <div class="doc-section" id="examples">
+      <h2>Examples</h2>
+
+      <h3>Row-level security with hooks</h3>
+<pre><code class="language-typescript">// hooks.ts
+let currentUser: any = null;
+
+export const onRequest = async (req) => {
+  // Parse user from token for use in other hooks
+  const token = req.headers.get("Authorization")?.split(" ")[1];
+  if (token) currentUser = await getUserFromToken(token);
+  else currentUser = null;
+};
+
+export const canAccess = ({ user, table, method }) => {
+  if (!user && method !== "GET")
+    return { error: "Authentication required" };
+};
+
+export const beforeSelect = (table, params) => {
+  // Users can only see their own rows
+  const ownedTables = ["todos", "notes", "files"];
+  if (ownedTables.includes(table) && currentUser) {
+    return { ...params, "eq.user_id": currentUser.id };
+  }
+};
+
+export const beforeInsert = (table, rows) => {
+  // Auto-set user_id on insert
+  const ownedTables = ["todos", "notes", "files"];
+  if (ownedTables.includes(table) && currentUser) {
+    rows.forEach(r => r.user_id = currentUser.id);
+  }
+};</code></pre>
+
+      <h3>Semantic search API</h3>
+<pre><code class="language-typescript">import BB from "busybase";
+import OpenAI from "openai";
+
+const db = BB("http://localhost:54321", "local");
+const openai = new OpenAI();
+
+// Index documents
+async function indexDoc(text: string, metadata: object) {
+  const { data } = await openai.embeddings.create({
+    model: "text-embedding-3-small", input: text
+  });
+  await db.from("docs").insert({
+    text,
+    ...metadata,
+    vector: data[0].embedding,
+  });
+}
+
+// Search
+async function search(query: string, limit = 5) {
+  const { data: embed } = await openai.embeddings.create({
+    model: "text-embedding-3-small", input: query
+  });
+  const { data } = await db.from("docs")
+    .select("text,title,url")
+    .vec(embed[0].embedding, limit);
+  return data;
+}
+
+// Usage
+await indexDoc("Bun is a fast JavaScript runtime", { title: "About Bun", url: "/bun" });
+const results = await search("fast JS runtimes");
+// results[0].title === "About Bun"</code></pre>
+
+      <h3>Supabase migration</h3>
+<pre><code class="language-typescript">// Before (Supabase)
+import { createClient } from "@supabase/supabase-js";
+const db = createClient("https://xxx.supabase.co", "your-anon-key");
+
+// After (BusyBase) — one line change
+import { createClient } from "busybase";
+const db = createClient("http://localhost:54321", "local");
+
+// Everything else stays the same:
+const { data, error } = await db.from("todos").select("*").eq("done", false);
+await db.auth.signInWithPassword({ email, password });</code></pre>
+
+      <h3>Express-style middleware with onRequest</h3>
+<pre><code class="language-typescript">// hooks.ts
+const rateLimit = new Map&lt;string, number[]&gt;();
+
+export const onRequest = async (req) => {
+  const ip = req.headers.get("x-forwarded-for") || "unknown";
+  const now = Date.now();
+  const window = 60_000; // 1 minute
+  const limit = 100;     // requests per minute
+
+  const times = (rateLimit.get(ip) || []).filter(t => now - t &lt; window);
+  times.push(now);
+  rateLimit.set(ip, times);
+
+  if (times.length > limit) {
+    return new Response(
+      JSON.stringify({ data: null, error: { message: "Rate limit exceeded" } }),
+      { status: 429, headers: { "Content-Type": "application/json" } }
+    );
+  }
+};</code></pre>
+    </div>
+
+  </main>
+</div>
+
+<!-- Back to top -->
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" aria-label="Back to top">↑</button>
+
+<script>
+// ── Highlight.js init ──
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('pre code').forEach(el => {
+    hljs.highlightElement(el);
+
+    // Add copy button to each pre
+    const pre = el.closest('pre');
+    if (pre) {
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.textContent = 'copy';
+      btn.onclick = () => {
+        navigator.clipboard.writeText(el.innerText).then(() => {
+          btn.textContent = 'copied!';
+          btn.classList.add('copied');
+          setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 2000);
+        });
+      };
+      pre.appendChild(btn);
+    }
+  });
+});
+
+// ── Theme toggle ──
+const themeBtn = document.querySelector('.theme-btn');
+function toggleTheme() {
+  const html = document.documentElement;
+  const isLight = html.getAttribute('data-theme') === 'light';
+  html.setAttribute('data-theme', isLight ? '' : 'light');
+  themeBtn.textContent = isLight ? '☀' : '🌙';
+  localStorage.setItem('bb-theme', isLight ? 'dark' : 'light');
+}
+// Restore saved theme
+const saved = localStorage.getItem('bb-theme');
+if (saved === 'light') { document.documentElement.setAttribute('data-theme', 'light'); themeBtn.textContent = '🌙'; }
+
+// ── Mobile sidebar ──
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('overlay');
+  sidebar.classList.toggle('open');
+  overlay.classList.toggle('open');
+}
+
+// ── Active section highlight ──
+const sections = document.querySelectorAll('.doc-section');
+const navLinks = document.querySelectorAll('.sidebar-items a');
+
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      navLinks.forEach(l => l.classList.remove('active'));
+      const link = document.querySelector(`.sidebar-items a[href="#${entry.target.id}"]`);
+      if (link) link.classList.add('active');
+    }
+  });
+}, { rootMargin: '-56px 0px -60% 0px', threshold: 0 });
+
+sections.forEach(s => observer.observe(s));
+
+// ── Reading progress ──
+const progress = document.getElementById('reading-progress');
+window.addEventListener('scroll', () => {
+  const total = document.body.scrollHeight - window.innerHeight;
+  progress.style.width = (window.scrollY / total * 100) + '%';
+
+  // Back to top
+  document.getElementById('backTop').classList.toggle('visible', window.scrollY > 400);
+});
+
+// ── Close sidebar on mobile link click ──
+navLinks.forEach(link => {
+  link.addEventListener('click', () => {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('overlay').classList.remove('open');
+  });
+});
+</script>
+</body>
+</html>
