@@ -13,13 +13,15 @@
   },
   "scripts": {
     "start": "bun run src/server.ts",
-    "build": "bun build src/server.ts --target=bun --outfile=src/server.js && bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js"
+    "build": "bun build src/server.ts --target=bun --outfile=src/server.js --external vectordb && bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js"
   },
   "files": [
     "src/server.js",
     "src/sdk.js"
   ],
-  "dependencies": {},
+  "dependencies": {
+    "vectordb": "^0.21.2"
+  },
   "keywords": ["database", "sqlite", "supabase", "rest", "api", "bun", "backend"],
   "author": "AnEntrypoint",
   "license": "ISC",

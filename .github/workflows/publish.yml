@@ -20,7 +20,7 @@ jobs:
 
       - run: bun install
 
-      - run: bun build src/server.ts --target=bun --outfile=src/server.js
+      - run: bun build src/server.ts --target=bun --outfile=src/server.js --external vectordb
       - run: bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js
 
       - uses: actions/setup-node@v4
