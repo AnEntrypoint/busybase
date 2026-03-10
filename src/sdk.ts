@@ -1,42 +1,74 @@
-const BB = (url, key) => {
-  const req = (path, opts = {}) => globalThis.fetch(`${url}/${path}`, { ...opts, headers: { "apikey": key, "Authorization": `Bearer ${BB.token || key}`, ...opts.headers } }).then(r => r.json());
-  const Q = (table) => {
-    const q = { filters: [], order: "", limit: 10, offset: 0, select: "*" };
-    const builder = {
+const BB = (url: string, key: string) => {
+  let token: string | null = null;
+  const baseUrl = url.replace(/\/$/, "");
+
+  const req = (path: string, opts: RequestInit = {}) =>
+    globalThis.fetch(`${baseUrl}/${path}`, {
+      ...opts,
+      headers: { apikey: key, Authorization: `Bearer ${token || key}`, ...opts.headers }
+    }).then(r => r.json());
+
+  const Q = (table: string, method?: string, body?: any) => {
+    const q: { filters: string[], order: string, limit: number, offset: number, select: string, range?: string } = {
+      filters: [], order: "", limit: 1000, offset: 0, select: "*"
+    };
+
+    const execute = () => {
+      const params = [`select=${q.select}`, ...q.filters];
+      if (q.order) params.push(`order=${q.order}`);
+      params.push(`limit=${q.limit}`, `offset=${q.offset}`);
+      if (q.range) params.push(`range=${q.range}`);
+      const qs = params.join("&");
+      if (method && body !== undefined) {
+        return req(`rest/v1/${table}?${qs}`, { method, body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
+      }
+      return req(`rest/v1/${table}?${qs}`);
+    };
+
+    const builder: any = {
       select: (cols = "*") => (q.select = cols, builder),
-      eq: (col, val) => (q.filters.push(`eq.${col}=${val}`), builder),
-      neq: (col, val) => (q.filters.push(`neq.${col}=${val}`), builder),
-      gt: (col, val) => (q.filters.push(`gt.${col}=${val}`), builder),
-      gte: (col, val) => (q.filters.push(`gte.${col}=${val}`), builder),
-      lt: (col, val) => (q.filters.push(`lt.${col}=${val}`), builder),
-      lte: (col, val) => (q.filters.push(`lte.${col}=${val}`), builder),
-      like: (col, val) => (q.filters.push(`like.${col}=${val}`), builder),
-      ilike: (col, val) => (q.filters.push(`ilike.${col}=${val}`), builder),
-      order: (col, { ascending = true } = {}) => (q.order = `${col}.${ascending ? "asc" : "desc"}`, builder),
-      limit: (n) => (q.limit = n, builder),
-      offset: (n) => (q.offset = n, builder),
-      range: (from, to) => (q.range = `${from},${to}`, builder),
-      then: (resolve, reject) => req(`rest/v1/${table}?select=${q.select}&${q.filters.join("&")}&order=${q.order}&limit=${q.limit}&offset=${q.offset}${q.range ? `&range=${q.range}` : ""}`).then(resolve, reject)
+      eq: (col: string, val: any) => (q.filters.push(`eq.${col}=${val}`), builder),
+      neq: (col: string, val: any) => (q.filters.push(`neq.${col}=${val}`), builder),
+      gt: (col: string, val: any) => (q.filters.push(`gt.${col}=${val}`), builder),
+      gte: (col: string, val: any) => (q.filters.push(`gte.${col}=${val}`), builder),
+      lt: (col: string, val: any) => (q.filters.push(`lt.${col}=${val}`), builder),
+      lte: (col: string, val: any) => (q.filters.push(`lte.${col}=${val}`), builder),
+      like: (col: string, val: any) => (q.filters.push(`like.${col}=${val}`), builder),
+      ilike: (col: string, val: any) => (q.filters.push(`ilike.${col}=${val}`), builder),
+      order: (col: string, { ascending = true } = {}) => (q.order = `${col}.${ascending ? "asc" : "desc"}`, builder),
+      limit: (n: number) => (q.limit = n, builder),
+      offset: (n: number) => (q.offset = n, builder),
+      range: (from: number, to: number) => (q.range = `${from},${to}`, builder),
+      then: (resolve: any, reject: any) => execute().then(resolve, reject)
     };
     return builder;
   };
-  const C = (table) => ({
-    select: (...cols) => Q(table).select(cols.join(",")),
-    insert: (data) => req("rest/v1/" + table, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]), headers: { "Content-Type": "application/json" } }),
-    upsert: (data) => req("rest/v1/" + table, { method: "PUT", body: JSON.stringify(Array.isArray(data) ? data : [data]), headers: { "Content-Type": "application/json" } }),
-    update: (data) => ({ eq: (col, val) => req(`rest/v1/${table}?eq.${col}=${val}`, { method: "PATCH", body: JSON.stringify(data), headers: { "Content-Type": "application/json" } }) }),
-    delete: () => ({ eq: (col, val) => req(`rest/v1/${table}?eq.${col}=${val}`, { method: "DELETE" }) })
+
+  const from = (table: string) => ({
+    select: (cols = "*") => Q(table).select(cols),
+    insert: (data: any) => req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]), headers: { "Content-Type": "application/json" } }),
+    upsert: (data: any) => {
+      // upsert: try insert, on conflict update — send as POST with conflict hint
+      return req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]), headers: { "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates" } });
+    },
+    update: (data: any) => Q(table, "PATCH", data),
+    delete: () => Q(table, "DELETE", null)
   });
+
   return {
-    from: (table) => C(table),
+    from,
     auth: {
-      signUp: (email, password) => req("auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password }), headers: { "Content-Type": "application/json" } }),
-      signIn: (email, password) => req("auth/v1/token", { method: "POST", body: JSON.stringify({ email, password }), headers: { "Content-Type": "application/json" } }).then(r => { if (r.access_token) BB.token = r.access_token; return r; }),
-      signOut: () => req("auth/v1/logout", { method: "POST" }).then(() => { BB.token = null; return {}; }),
-      getUser: () => req("auth/v1/user", { method: "GET" })
+      signUp: (email: string, password: string) =>
+        req("auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password }), headers: { "Content-Type": "application/json" } }),
+      signIn: (email: string, password: string) =>
+        req("auth/v1/token", { method: "POST", body: JSON.stringify({ email, password }), headers: { "Content-Type": "application/json" } })
+          .then((r: any) => { if (r.access_token) token = r.access_token; return r; }),
+      signOut: () =>
+        req("auth/v1/logout", { method: "POST" }).then(() => { token = null; return {}; }),
+      getUser: () => req("auth/v1/user")
     }
   };
 };
-BB.token = null;
+
 export { BB as createClient };
 export default BB;

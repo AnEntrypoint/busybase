@@ -3,45 +3,15 @@
   "objective": "Create a Supabase-like HTTP API using Bun with built-in SQLite, publish as AnEntrypoint/busybase, SDK must feel like Supabase",
   "items": [
     {
-      "id": "create-server",
-      "subject": "Create Bun HTTP server with SQLite and REST API endpoints",
-      "status": "pending",
-      "description": "Build minimal HTTP server using Bun that serves as Supabase alternative with built-in SQLite. Must handle: auth, tables CRUD, query params (eq, neq, gt, gte, lt, lte, like, ilike, in, is, order, limit, range, offset)",
-      "blocking": ["create-sdk"],
-      "blockedBy": [],
-      "effort": "medium",
-      "category": "feature"
-    },
-    {
-      "id": "create-sdk",
-      "subject": "Create Supabase-like JavaScript SDK",
-      "status": "pending",
-      "description": "Build SDK that mimics Supabase client: createClient(url, key), from(table).select().eq().order().limit() chainable API, auth (signUp, signIn, signOut, user), insert(), update(), delete(), subscribe() for realtime",
-      "blocking": ["test-system"],
-      "blockedBy": ["create-server"],
-      "effort": "medium",
-      "category": "feature"
-    },
-    {
-      "id": "test-system",
-      "subject": "Test full system end-to-end",
-      "status": "pending",
-      "description": "Test: start server, connect via SDK, create table, insert data, query with filters, update, delete, auth flow. Verify all Supabase-like behaviors work correctly",
-      "blocking": ["publish-npm"],
-      "blockedBy": ["create-sdk"],
-      "effort": "medium",
-      "category": "test"
-    },
-    {
       "id": "publish-npm",
       "subject": "Publish to npm as AnEntrypoint/busybase",
       "status": "pending",
       "description": "Package properly with package.json, publish to npm registry under AnEntrypoint organization. Must work with bunx busybase",
       "blocking": [],
-      "blockedBy": ["test-system"],
+      "blockedBy": [],
       "effort": "small",
       "category": "infra"
     }
   ],
-  "completed": []
+  "completed": ["create-server", "create-sdk", "test-system"]
 }

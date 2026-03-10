@@ -1,9 +1,32 @@
-// @bun
 // src/sdk.ts
 var BB = (url, key) => {
-  const req = (path, opts = {}) => globalThis.fetch(`${url}/${path}`, { ...opts, headers: { apikey: key, Authorization: `Bearer ${BB.token || key}`, ...opts.headers } }).then((r) => r.json());
-  const Q = (table) => {
-    const q = { filters: [], order: "", limit: 10, offset: 0, select: "*" };
+  let token = null;
+  const baseUrl = url.replace(/\/$/, "");
+  const req = (path, opts = {}) => globalThis.fetch(`${baseUrl}/${path}`, {
+    ...opts,
+    headers: { apikey: key, Authorization: `Bearer ${token || key}`, ...opts.headers }
+  }).then((r) => r.json());
+  const Q = (table, method, body) => {
+    const q = {
+      filters: [],
+      order: "",
+      limit: 1000,
+      offset: 0,
+      select: "*"
+    };
+    const execute = () => {
+      const params = [`select=${q.select}`, ...q.filters];
+      if (q.order)
+        params.push(`order=${q.order}`);
+      params.push(`limit=${q.limit}`, `offset=${q.offset}`);
+      if (q.range)
+        params.push(`range=${q.range}`);
+      const qs = params.join("&");
+      if (method && body !== undefined) {
+        return req(`rest/v1/${table}?${qs}`, { method, body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
+      }
+      return req(`rest/v1/${table}?${qs}`);
+    };
     const builder = {
       select: (cols = "*") => (q.select = cols, builder),
       eq: (col, val) => (q.filters.push(`eq.${col}=${val}`), builder),
@@ -17,36 +40,37 @@ var BB = (url, key) => {
       order: (col, { ascending = true } = {}) => (q.order = `${col}.${ascending ? "asc" : "desc"}`, builder),
       limit: (n) => (q.limit = n, builder),
       offset: (n) => (q.offset = n, builder),
-      range: (from, to) => (q.range = `${from},${to}`, builder),
-      then: (resolve, reject) => req(`rest/v1/${table}?select=${q.select}&${q.filters.join("&")}&order=${q.order}&limit=${q.limit}&offset=${q.offset}${q.range ? `&range=${q.range}` : ""}`).then(resolve, reject)
+      range: (from2, to) => (q.range = `${from2},${to}`, builder),
+      then: (resolve, reject) => execute().then(resolve, reject)
     };
     return builder;
   };
-  const C = (table) => ({
-    select: (...cols) => Q(table).select(cols.join(",")),
-    insert: (data) => req("rest/v1/" + table, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]), headers: { "Content-Type": "application/json" } }),
-    upsert: (data) => req("rest/v1/" + table, { method: "PUT", body: JSON.stringify(Array.isArray(data) ? data : [data]), headers: { "Content-Type": "application/json" } }),
-    update: (data) => ({ eq: (col, val) => req(`rest/v1/${table}?eq.${col}=${val}`, { method: "PATCH", body: JSON.stringify(data), headers: { "Content-Type": "application/json" } }) }),
-    delete: () => ({ eq: (col, val) => req(`rest/v1/${table}?eq.${col}=${val}`, { method: "DELETE" }) })
+  const from = (table) => ({
+    select: (cols = "*") => Q(table).select(cols),
+    insert: (data) => req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]), headers: { "Content-Type": "application/json" } }),
+    upsert: (data) => {
+      return req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]), headers: { "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" } });
+    },
+    update: (data) => Q(table, "PATCH", data),
+    delete: () => Q(table, "DELETE", null)
   });
   return {
-    from: (table) => C(table),
+    from,
     auth: {
       signUp: (email, password) => req("auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password }), headers: { "Content-Type": "application/json" } }),
       signIn: (email, password) => req("auth/v1/token", { method: "POST", body: JSON.stringify({ email, password }), headers: { "Content-Type": "application/json" } }).then((r) => {
         if (r.access_token)
-          BB.token = r.access_token;
+          token = r.access_token;
         return r;
       }),
       signOut: () => req("auth/v1/logout", { method: "POST" }).then(() => {
-        BB.token = null;
+        token = null;
         return {};
       }),
-      getUser: () => req("auth/v1/user", { method: "GET" })
+      getUser: () => req("auth/v1/user")
     }
   };
 };
-BB.token = null;
 var sdk_default = BB;
 export {
   sdk_default as default,

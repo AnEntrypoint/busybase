@@ -1,0 +1,8 @@
+.gm-stop-verified
+.code-search/
+*.db
+*.db-shm
+*.db-wal
+nul
+node_modules/
+test.ts
