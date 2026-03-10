@@ -18,26 +18,25 @@ var DIR, PORT, Z, SENTINEL = "_sentinel_", vdb, tableCache, openTbl = async (nam
   const t = await vdb.createTable(name, schema);
   tableCache.set(name, t);
   return t;
-}, real = (col = "id") => `${col} != '${SENTINEL}'`, execFilter = async (t, filter) => {
+}, nonces, real = (col = "id") => `${col} != '${SENTINEL}'`, execFilter = async (t, filter) => {
   try {
     return await t.filter(filter).execute();
   } catch {
     return [];
   }
-}, getRows = async (tblName, filter) => {
-  const t = await openTbl(tblName);
+}, getRows = async (name, filter) => {
+  const t = await openTbl(name);
   if (!t)
     return [];
-  const pk = tblName === "_sessions" ? "token" : "id";
-  return execFilter(t, `(${real(pk)}) AND (${filter})`);
-}, getAllRows = async (tblName) => {
-  const t = await openTbl(tblName);
+  return execFilter(t, `(${real(name === "_sessions" ? "token" : "id")}) AND (${filter})`);
+}, getAllRows = async (name) => {
+  const t = await openTbl(name);
   if (!t)
     return [];
   return execFilter(t, real("id"));
-}, validId = (s) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) && !s.startsWith("_"), cors, json = (data, status = 200) => Response.json(data, { status, headers: cors }), ok = (data, status = 200) => json({ data, error: null }, status), err = (msg, code = 400, details = null) => json({ data: null, error: { message: msg, details, code } }, code), toFilter = (p) => {
-  const parts = [];
+}, validId = (s) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) && s !== "_users" && s !== "_sessions", cors, json = (data, status = 200, extra = {}) => Response.json(data, { status, headers: { ...cors, ...extra } }), ok = (data, status = 200, extra = {}) => json({ data, error: null }, status, extra), err = (msg, code = 400, hint = "") => json({ data: null, error: { message: msg, hint, code } }, code), toFilter = (p) => {
   const skip = new Set(["select", "order", "limit", "offset", "vec", "count"]);
+  const parts = [];
   for (const [k, val] of Object.entries(p)) {
     if (skip.has(k))
       continue;
@@ -50,20 +49,31 @@ var DIR, PORT, Z, SENTINEL = "_sentinel_", vdb, tableCache, openTbl = async (nam
       continue;
     }
     if (k === "or") {
-      const orParts = val.split(",").map((clause) => {
-        const [col2, op2, ...rest] = clause.split(".");
-        const v = rest.join(".");
+      const orParts = decodeURIComponent(val).split(",").map((clause) => {
+        const d1 = clause.indexOf("."), d2 = clause.indexOf(".", d1 + 1);
+        if (d1 < 0 || d2 < 0)
+          return null;
+        const col2 = clause.slice(0, d1), op2 = clause.slice(d1 + 1, d2), v = clause.slice(d2 + 1).replace(/'/g, "''");
         if (!validId(col2))
           return null;
-        const safe2 = v.replace(/'/g, "''");
-        const sqlOp = op2 === "eq" ? "=" : op2 === "neq" ? "!=" : op2 === "gt" ? ">" : op2 === "gte" ? ">=" : op2 === "lt" ? "<" : op2 === "lte" ? "<=" : null;
-        return sqlOp ? `${col2} ${sqlOp} '${safe2}'` : null;
+        const s = op2 === "eq" ? "=" : op2 === "neq" ? "!=" : op2 === "gt" ? ">" : op2 === "gte" ? ">=" : op2 === "lt" ? "<" : op2 === "lte" ? "<=" : null;
+        return s ? `${col2} ${s} '${v}'` : null;
       }).filter(Boolean);
       if (orParts.length)
         parts.push(`(${orParts.join(" OR ")})`);
       continue;
     }
-    const op = k.match(/^(eq|neq|gt|gte|lt|lte|like|ilike|is|not)\./)?.[1];
+    if (k.startsWith("not.")) {
+      const rest = k.slice(4), dot = rest.indexOf(".");
+      const col2 = dot >= 0 ? rest.slice(0, dot) : rest, op2 = dot >= 0 ? rest.slice(dot + 1) : "eq";
+      if (!validId(col2))
+        continue;
+      const safe2 = val.replace(/'/g, "''");
+      const s = op2 === "eq" ? "=" : op2 === "neq" ? "!=" : op2 === "gt" ? ">" : op2 === "gte" ? ">=" : op2 === "lt" ? "<" : op2 === "lte" ? "<=" : "=";
+      parts.push(`NOT (${col2} ${s} '${safe2}')`);
+      continue;
+    }
+    const op = k.match(/^(eq|neq|gt|gte|lt|lte|like|ilike|is)\./)?.[1];
     if (!op)
       continue;
     const col = k.slice(op.length + 1);
@@ -74,15 +84,37 @@ var DIR, PORT, Z, SENTINEL = "_sentinel_", vdb, tableCache, openTbl = async (nam
       parts.push(`${col} LIKE '%${safe}%'`);
     else if (op === "is")
       parts.push(`${col} IS ${val}`);
-    else if (op === "not")
-      parts.push(`NOT (${col} = '${safe}')`);
     else {
-      const sqlOp = op === "eq" ? "=" : op === "neq" ? "!=" : op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : "<=";
-      parts.push(`${col} ${sqlOp} '${safe}'`);
+      const s = op === "eq" ? "=" : op === "neq" ? "!=" : op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : "<=";
+      parts.push(`${col} ${s} '${safe}'`);
     }
   }
   return parts.join(" AND ");
-}, clean = (rows) => rows.map(({ vector, _distance, pw, ...r }) => _distance !== undefined ? { ...r, _distance } : r), getUser = async (r) => {
+}, clean = (rows) => rows.map(({ vector, pw, pubkey: _pk, ...r }) => r), makeUser = (u) => ({
+  id: u.id,
+  email: u.email || null,
+  role: u.role || "authenticated",
+  user_metadata: JSON.parse(u.meta || "{}"),
+  app_metadata: JSON.parse(u.app_meta || "{}"),
+  identities: [],
+  aud: "authenticated",
+  created_at: u.created,
+  updated_at: u.updated || u.created,
+  last_sign_in_at: u.last_sign_in || u.created,
+  email_confirmed_at: u.email ? u.created : null
+}), makeSession = (token, refresh, exp, user) => ({
+  access_token: token,
+  refresh_token: refresh,
+  token_type: "bearer",
+  expires_in: 604800,
+  expires_at: Math.floor(exp / 1000),
+  user
+}), issueSession = async (uid) => {
+  const token = crypto.randomUUID(), refresh = crypto.randomUUID();
+  const exp = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  await (await openTbl("_sessions")).add([{ token, refresh, uid, exp, vector: Z }]);
+  return { token, refresh, exp };
+}, getUser = async (r) => {
   const token = r.headers.get("Authorization")?.split(" ")[1];
   if (!token)
     return null;
@@ -91,9 +123,8 @@ var DIR, PORT, Z, SENTINEL = "_sentinel_", vdb, tableCache, openTbl = async (nam
   if (!s || s.exp < Date.now())
     return null;
   const users = await getRows("_users", `id = '${s.uid}'`);
-  const u = users[0];
-  return u ? { id: u.id, email: u.email, user_metadata: JSON.parse(u.meta || "{}"), created_at: u.created } : null;
-};
+  return users[0] ? makeUser(users[0]) : null;
+}, importPubKey = (b642) => crypto.subtle.importKey("raw", Uint8Array.from(atob(b642), (c) => c.charCodeAt(0)), { name: "Ed25519" }, false, ["verify"]);
 var init_server = __esm(async () => {
   DIR = process.env.BUSYBASE_DIR || "busybase_data";
   PORT = process.env.BUSYBASE_PORT || 54321;
@@ -101,9 +132,10 @@ var init_server = __esm(async () => {
   vdb = await connect(DIR);
   tableCache = new Map;
   if (!await openTbl("_users"))
-    await mkTbl("_users", [{ id: SENTINEL, email: SENTINEL, pw: "", created: "", meta: "{}", vector: Z }]);
+    await mkTbl("_users", [{ id: SENTINEL, email: SENTINEL, pw: "", pubkey: "", role: "authenticated", meta: "{}", app_meta: "{}", created: "", updated: "", last_sign_in: "", vector: Z }]);
   if (!await openTbl("_sessions"))
-    await mkTbl("_sessions", [{ token: SENTINEL, uid: "", exp: 0, vector: Z }]);
+    await mkTbl("_sessions", [{ token: SENTINEL, refresh: SENTINEL, uid: "", exp: 0, vector: Z }]);
+  nonces = new Map;
   cors = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
@@ -115,32 +147,74 @@ var init_server = __esm(async () => {
     const { pathname, searchParams } = new URL(req.url);
     const P = Object.fromEntries(searchParams);
     const B = await req.json().catch(() => ({}));
+    const prefer = req.headers.get("Prefer") || "";
+    const returnMinimal = prefer.includes("return=minimal");
     if (pathname.startsWith("/auth/v1/")) {
       const action = pathname.split("/")[3];
+      if (action === "keypair" && req.method === "GET") {
+        const nonce = crypto.randomUUID();
+        nonces.set(nonce, Date.now() + 60000);
+        return ok({ nonce });
+      }
+      if (action === "keypair" && req.method === "POST") {
+        const { pubkey, nonce, signature } = B;
+        if (!pubkey || !nonce || !signature)
+          return err("pubkey, nonce and signature required");
+        const exp = nonces.get(nonce);
+        if (!exp || exp < Date.now())
+          return err("Invalid or expired nonce", 401);
+        nonces.delete(nonce);
+        let valid = false;
+        try {
+          const key = await importPubKey(pubkey);
+          const sig = Uint8Array.from(atob(signature), (c) => c.charCodeAt(0));
+          valid = await crypto.subtle.verify("Ed25519", key, sig, new TextEncoder().encode(nonce));
+        } catch {
+          return err("Invalid signature", 401);
+        }
+        if (!valid)
+          return err("Signature verification failed", 401);
+        const now = new Date().toISOString();
+        let users = await getRows("_users", `pubkey = '${pubkey}'`);
+        let u = users[0];
+        const ut = await openTbl("_users");
+        if (!u) {
+          u = { id: crypto.randomUUID(), email: "", pw: "", pubkey, role: "authenticated", meta: "{}", app_meta: "{}", created: now, updated: now, last_sign_in: now, vector: Z };
+          await ut.add([u]);
+        } else {
+          await ut.delete(`id = '${u.id}'`);
+          u = { ...u, last_sign_in: now, updated: now };
+          await ut.add([u]);
+        }
+        const { token, refresh, exp: sExp } = await issueSession(u.id);
+        const user = makeUser(u);
+        return ok({ user, session: makeSession(token, refresh, sExp, user) });
+      }
       if (action === "signup") {
         if (!B.email || !B.password)
           return err("Email & password required");
-        const existing = await getRows("_users", `email = '${B.email.replace(/'/g, "''")}'`);
+        const emailLower = B.email.toLowerCase();
+        const existing = await getRows("_users", `email = '${emailLower.replace(/'/g, "''")}'`);
         if (existing.length)
-          return err("Email already registered", 409);
-        const id = crypto.randomUUID();
-        const pw = await Bun.password.hash(B.password);
-        const meta = JSON.stringify(B.data || {});
-        await (await openTbl("_users")).add([{ id, email: B.email, pw, created: new Date().toISOString(), meta, vector: Z }]);
-        const user = { id, email: B.email, user_metadata: B.data || {}, created_at: new Date().toISOString() };
-        return ok({ user, session: null }, 201);
+          return err("User already registered", 400, "Check if user already exists");
+        const now = new Date().toISOString();
+        const u = { id: crypto.randomUUID(), email: emailLower, pw: await Bun.password.hash(B.password), pubkey: "", role: "authenticated", meta: JSON.stringify(B.data || {}), app_meta: "{}", created: now, updated: now, last_sign_in: now, vector: Z };
+        await (await openTbl("_users")).add([u]);
+        return ok({ user: makeUser(u), session: null });
       }
       if (action === "token") {
-        const users = await getRows("_users", `email = '${(B.email || "").replace(/'/g, "''")}'`);
+        const emailLower = (B.email || "").toLowerCase();
+        const users = await getRows("_users", `email = '${emailLower.replace(/'/g, "''")}'`);
         const u = users[0];
         if (!u || !await Bun.password.verify(B.password || "", u.pw))
           return err("Invalid login credentials", 400);
-        const token = crypto.randomUUID();
-        const exp = Date.now() + 7 * 24 * 60 * 60 * 1000;
-        await (await openTbl("_sessions")).add([{ token, uid: u.id, exp, vector: Z }]);
-        const user = { id: u.id, email: u.email, user_metadata: JSON.parse(u.meta || "{}"), created_at: u.created };
-        const session = { access_token: token, token_type: "bearer", expires_in: 604800, user };
-        return ok({ user, session });
+        const now = new Date().toISOString();
+        const ut = await openTbl("_users");
+        await ut.delete(`id = '${u.id}'`);
+        await ut.add([{ ...u, last_sign_in: now, updated: now }]);
+        const { token, refresh, exp } = await issueSession(u.id);
+        const user = makeUser({ ...u, last_sign_in: now, updated: now });
+        return ok({ user, session: makeSession(token, refresh, exp, user) });
       }
       if (action === "user") {
         const user = await getUser(req);
@@ -161,17 +235,23 @@ var init_server = __esm(async () => {
         const user = await getUser(req);
         if (!user)
           return err("Not authenticated", 401);
-        const t = await openTbl("_users");
         const existing = await getRows("_users", `id = '${user.id}'`);
         const u = existing[0];
         if (!u)
           return err("User not found", 404);
-        await t.delete(`id = '${user.id}'`);
-        const newMeta = JSON.stringify({ ...JSON.parse(u.meta || "{}"), ...B.data || {} });
-        const newPw = B.password ? await Bun.password.hash(B.password) : u.pw;
-        const newEmail = B.email || u.email;
-        await t.add([{ id: u.id, email: newEmail, pw: newPw, created: u.created, meta: newMeta, vector: Z }]);
-        return ok({ user: { id: u.id, email: newEmail, user_metadata: JSON.parse(newMeta), created_at: u.created } });
+        const ut = await openTbl("_users");
+        await ut.delete(`id = '${u.id}'`);
+        const now = new Date().toISOString();
+        const merged = {
+          ...u,
+          email: B.email ? B.email.toLowerCase() : u.email,
+          pw: B.password ? await Bun.password.hash(B.password) : u.pw,
+          meta: JSON.stringify({ ...JSON.parse(u.meta || "{}"), ...B.data || {} }),
+          app_meta: JSON.stringify({ ...JSON.parse(u.app_meta || "{}"), ...B.app_metadata || {} }),
+          updated: now
+        };
+        await ut.add([merged]);
+        return ok({ user: makeUser(merged) });
       }
     }
     if (pathname.startsWith("/rest/v1/")) {
@@ -187,9 +267,13 @@ var init_server = __esm(async () => {
             return ok([]);
           const limit2 = P.limit ? parseInt(P.limit) : 10;
           const filter2 = toFilter(P);
-          let q = t.search(JSON.parse(P.vec)).limit(limit2);
-          q = q.filter(filter2 ? `(${real()}) AND (${filter2})` : real());
-          return ok(clean(await q.execute()));
+          try {
+            let q = t.search(JSON.parse(P.vec)).limit(limit2);
+            q = q.filter(filter2 ? `(${real()}) AND (${filter2})` : real());
+            return ok(clean(await q.execute()));
+          } catch {
+            return err("Invalid vector", 400);
+          }
         }
         const filter = toFilter(P);
         let rows = filter ? await getRows(table, filter) : await getAllRows(table);
@@ -204,10 +288,14 @@ var init_server = __esm(async () => {
         }
         const limit = P.limit ? parseInt(P.limit) : 1000;
         const offset = P.offset ? parseInt(P.offset) : 0;
-        const data = clean(rows).slice(offset, offset + limit);
-        if (P.count === "exact")
-          return json({ data, error: null, count: rows.length }, 200);
-        return ok(data);
+        const page = clean(rows).slice(offset, offset + limit);
+        const extra = {};
+        if (P.count === "exact" || prefer.includes("count=exact")) {
+          extra["Content-Range"] = `${offset}-${offset + page.length - 1}/${rows.length}`;
+          return json({ data: page, error: null, count: rows.length }, 200, extra);
+        }
+        extra["Content-Range"] = `${offset}-${offset + page.length - 1}/*`;
+        return ok(page, 200, extra);
       }
       if (req.method === "POST") {
         const rows = Array.isArray(B) ? B : [B];
@@ -221,6 +309,8 @@ var init_server = __esm(async () => {
           t = await mkTbl(table, prepared);
         else
           await t.add(prepared);
+        if (returnMinimal)
+          return new Response(null, { status: 204, headers: cors });
         return ok(clean(prepared), 201);
       }
       if (req.method === "PUT" || req.method === "PATCH") {
@@ -237,6 +327,8 @@ var init_server = __esm(async () => {
         await t.delete(`(${real()}) AND (${filter})`);
         const updated = existing.map((r) => ({ ...r, ...data, vector: r.vector ?? Z }));
         await t.add(updated);
+        if (returnMinimal)
+          return new Response(null, { status: 204, headers: cors });
         return ok(clean(updated));
       }
       if (req.method === "DELETE") {
@@ -247,6 +339,8 @@ var init_server = __esm(async () => {
         if (!t)
           return err("Table not found", 404);
         await t.delete(`(${real()}) AND (${filter})`);
+        if (returnMinimal)
+          return new Response(null, { status: 204, headers: cors });
         return ok([]);
       }
     }
@@ -256,18 +350,90 @@ var init_server = __esm(async () => {
 });
 
 // src/sdk.ts
+var b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+var unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+var genKeypair = async () => {
+  const kp = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const [pub, priv] = await Promise.all([
+    crypto.subtle.exportKey("raw", kp.publicKey),
+    crypto.subtle.exportKey("pkcs8", kp.privateKey)
+  ]);
+  return { pubkey: b64(pub), privkey: b64(priv) };
+};
+var sign = async (privkeyB64, message) => {
+  const key = await crypto.subtle.importKey("pkcs8", unb64(privkeyB64), { name: "Ed25519" }, false, ["sign"]);
+  return b64(await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(message)));
+};
+var makeStore = () => {
+  try {
+    localStorage.setItem("_bb_", "1");
+    localStorage.removeItem("_bb_");
+    return localStorage;
+  } catch {
+    const m = new Map;
+    return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, v), removeItem: (k) => m.delete(k) };
+  }
+};
 var BB = (url, key) => {
   let token = null;
   let session = null;
   const authListeners = [];
   const base = url.replace(/\/$/, "");
+  const store = makeStore();
   const emit = (event, s) => authListeners.forEach((cb) => cb(event, s));
+  const setSession_ = (s) => {
+    session = s;
+    token = s?.access_token ?? null;
+  };
   const req = async (path, opts = {}) => {
     const r = await globalThis.fetch(`${base}/${path}`, {
       ...opts,
       headers: { apikey: key, Authorization: `Bearer ${token || key}`, "Content-Type": "application/json", ...opts.headers }
     });
     return r.json();
+  };
+  const keypair = {
+    generate: genKeypair,
+    signIn: async (privkeyB64) => {
+      let privkey = privkeyB64 ?? store.getItem("_bb_privkey");
+      let pubkey = store.getItem("_bb_pubkey");
+      if (!privkey) {
+        const kp = await genKeypair();
+        privkey = kp.privkey;
+        pubkey = kp.pubkey;
+        store.setItem("_bb_privkey", privkey);
+        store.setItem("_bb_pubkey", pubkey);
+      } else if (!pubkey) {
+        const privCrypto = await crypto.subtle.importKey("pkcs8", unb64(privkey), { name: "Ed25519" }, true, ["sign"]);
+        return { data: null, error: { message: "Pubkey missing \u2014 call keypair.restore(privkey, pubkey)" } };
+      }
+      const nonceRes = await req("auth/v1/keypair");
+      if (nonceRes.error)
+        return nonceRes;
+      const nonce = nonceRes.data.nonce;
+      const signature = await sign(privkey, nonce);
+      const r = await req("auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature }) });
+      if (r.data?.session) {
+        setSession_(r.data.session);
+        store.setItem("_bb_privkey", privkey);
+        store.setItem("_bb_pubkey", pubkey);
+        emit("SIGNED_IN", session);
+      }
+      return r;
+    },
+    restore: async (privkey, pubkey) => {
+      store.setItem("_bb_privkey", privkey);
+      store.setItem("_bb_pubkey", pubkey);
+      return keypair.signIn(privkey);
+    },
+    export: () => ({
+      privkey: store.getItem("_bb_privkey"),
+      pubkey: store.getItem("_bb_pubkey")
+    }),
+    forget: () => {
+      store.removeItem("_bb_privkey");
+      store.removeItem("_bb_pubkey");
+    }
   };
   const Q = (table, method, body) => {
     const q = { filters: [], order: "", limit: 0, offset: 0, select: "*", vec: "", count: "" };
@@ -291,14 +457,14 @@ var BB = (url, key) => {
       const res = await run();
       if (res.error)
         return res;
-      let data = res.data ?? res;
+      const data = res.data ?? res;
       if (_single) {
-        if (!data?.length)
-          return { data: null, error: { message: "No rows found", code: 406 } };
+        if (!Array.isArray(data) || !data.length)
+          return { data: null, error: { message: "JSON object requested, multiple (or no) rows returned", code: 406 } };
         return { data: data[0], error: null };
       }
       if (_maybeSingle)
-        return { data: data?.[0] ?? null, error: null };
+        return { data: Array.isArray(data) ? data[0] ?? null : data, error: null };
       return { data, error: null, ...res.count !== undefined ? { count: res.count } : {} };
     };
     const b = {
@@ -313,12 +479,13 @@ var BB = (url, key) => {
       ilike: (col, val) => (q.filters.push(`ilike.${col}=${val}`), b),
       is: (col, val) => (q.filters.push(`is.${col}=${val}`), b),
       in: (col, vals) => (q.filters.push(`in.${col}=${vals.join(",")}`), b),
-      not: (col, _op, val) => (q.filters.push(`not.${col}=${val}`), b),
+      not: (col, op, val) => (q.filters.push(`not.${col}.${op}=${val}`), b),
       or: (clause) => (q.filters.push(`or=${clause}`), b),
+      filter: (col, op, val) => (q.filters.push(`${op}.${col}=${val}`), b),
       order: (col, { ascending = true } = {}) => (q.order = `${col}.${ascending ? "asc" : "desc"}`, b),
       limit: (n) => (q.limit = n, b),
       offset: (n) => (q.offset = n, b),
-      range: (from2, to) => (q.limit = to - from2 + 1, q.offset = from2, b),
+      range: (from2, to) => (q.offset = from2, q.limit = to - from2 + 1, b),
       count: (type = "exact") => (q.count = type, b),
       single: () => (_single = true, b),
       maybeSingle: () => (_maybeSingle = true, b),
@@ -327,40 +494,47 @@ var BB = (url, key) => {
     };
     return b;
   };
+  const wrap = (p) => p.then((r) => r?.error !== undefined ? r : { data: r, error: null });
   const from = (table) => ({
     select: (cols = "*") => Q(table).select(cols),
-    insert: (data, opts = {}) => req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]) }).then((r) => r.error ? r : { data: r.data ?? r, error: null }),
-    upsert: (data) => req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]) }).then((r) => r.error ? r : { data: r.data ?? r, error: null }),
+    insert: (data) => wrap(req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]) })),
+    upsert: (data) => wrap(req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]) })),
     update: (data) => Q(table, "PATCH", data),
     delete: () => Q(table, "DELETE", null)
   });
   const auth = {
-    signUp: ({ email, password, options }) => req("auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password, data: options?.data }) }).then((r) => r.error ? r : (() => {
-      if (r.data?.session?.access_token) {
-        token = r.data.session.access_token;
-        session = r.data.session;
+    signIn: () => keypair.signIn(),
+    signUp: ({ email, password, options }) => req("auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password, data: options?.data }) }).then((r) => {
+      if (r.data?.session) {
+        setSession_(r.data.session);
         emit("SIGNED_IN", session);
       }
       return r;
-    })()),
-    signInWithPassword: ({ email, password }) => req("auth/v1/token", { method: "POST", body: JSON.stringify({ email, password }) }).then((r) => r.error ? r : (() => {
-      if (r.data?.session?.access_token) {
-        token = r.data.session.access_token;
-        session = r.data.session;
+    }),
+    signInWithPassword: ({ email, password }) => req("auth/v1/token", { method: "POST", body: JSON.stringify({ email, password }) }).then((r) => {
+      if (r.data?.session) {
+        setSession_(r.data.session);
         emit("SIGNED_IN", session);
       }
       return r;
-    })()),
-    signIn: ({ email, password }) => auth.signInWithPassword({ email, password }),
+    }),
     signOut: () => req("auth/v1/logout", { method: "POST" }).then((r) => {
-      token = null;
-      session = null;
+      setSession_(null);
       emit("SIGNED_OUT", null);
       return r;
     }),
     getUser: () => req("auth/v1/user"),
     getSession: () => Promise.resolve({ data: { session }, error: null }),
-    updateUser: (attrs) => req("auth/v1/update", { method: "PATCH", body: JSON.stringify(attrs) }),
+    updateUser: (attrs) => req("auth/v1/update", { method: "PATCH", body: JSON.stringify(attrs) }).then((r) => {
+      if (r.data?.user)
+        emit("USER_UPDATED", session);
+      return r;
+    }),
+    setSession: (s) => {
+      setSession_(s);
+      return Promise.resolve({ data: { session: s }, error: null });
+    },
+    resetPasswordForEmail: (_email) => Promise.resolve({ data: {}, error: null }),
     onAuthStateChange: (cb) => {
       authListeners.push(cb);
       cb("INITIAL_SESSION", session);
@@ -369,7 +543,8 @@ var BB = (url, key) => {
         if (i > -1)
           authListeners.splice(i, 1);
       } } } };
-    }
+    },
+    keypair
   };
   return { from, auth };
 };
@@ -463,17 +638,53 @@ if (cmd === "serve") {
   console.log(`
 Testing against ${URL2}
 `);
-  console.log("[auth.signUp]");
-  const su = await db.auth.signUp({ email: `test_${Date.now()}@bb.com`, password: "pass123" });
+  console.log("[auth.keypair \u2014 anonymous sign-in]");
+  const kp1 = await db.auth.keypair.signIn();
+  check("keypair signIn returns {data,error}", kp1.data !== undefined && "error" in kp1, kp1);
+  check("keypair user.id exists", !!kp1.data?.user?.id, kp1.data?.user);
+  check("keypair session.access_token", !!kp1.data?.session?.access_token, kp1.data?.session);
+  check("keypair session.refresh_token", !!kp1.data?.session?.refresh_token, kp1.data?.session);
+  check("keypair session.expires_at is number", typeof kp1.data?.session?.expires_at === "number", kp1.data?.session);
+  console.log(`
+[auth.keypair \u2014 same key = same user]`);
+  const exported = db.auth.keypair.export();
+  const db2 = sdk_default(URL2, "local");
+  const kp2 = await db2.auth.keypair.restore(exported.privkey, exported.pubkey);
+  check("restore returns same user.id", kp2.data?.user?.id === kp1.data?.user?.id, { kp1: kp1.data?.user?.id, kp2: kp2.data?.user?.id });
+  console.log(`
+[auth.keypair \u2014 new keypair = new user]`);
+  const db3 = sdk_default(URL2, "local");
+  const kp3 = await db3.auth.keypair.signIn();
+  check("different keypair = different user", kp3.data?.user?.id !== kp1.data?.user?.id, { id1: kp1.data?.user?.id, id3: kp3.data?.user?.id });
+  console.log(`
+[keypair user \u2014 progressively add email]`);
+  const dbKp = sdk_default(URL2, "local");
+  await dbKp.auth.keypair.restore(exported.privkey, exported.pubkey);
+  const upgr = await dbKp.auth.updateUser({ email: `keypair_${Date.now()}@test.com`, data: { name: "Anon" } });
+  check("updateUser on keypair account works", !!upgr.data?.user?.email, upgr.data);
+  check("metadata stored", upgr.data?.user?.user_metadata?.name === "Anon", upgr.data?.user);
+  console.log(`
+[auth.signUp]`);
+  const rawEmail = `Test_${Date.now()}@BB.com`;
+  const su = await db.auth.signUp({ email: rawEmail, password: "pass123" });
   check("returns {data,error}", su.data !== undefined && "error" in su, su);
   check("data.user has id", !!su.data?.user?.id, su.data);
+  check("email lowercased", su.data?.user?.email === rawEmail.toLowerCase(), su.data?.user);
+  check("user has role=authenticated", su.data?.user?.role === "authenticated", su.data?.user);
+  check("user has user_metadata", typeof su.data?.user?.user_metadata === "object", su.data?.user);
+  check("user has app_metadata", typeof su.data?.user?.app_metadata === "object", su.data?.user);
+  check("user has created_at", !!su.data?.user?.created_at, su.data?.user);
   const email = su.data?.user?.email;
   console.log(`
 [auth.signInWithPassword]`);
   const si = await db.auth.signInWithPassword({ email, password: "pass123" });
   check("returns {data,error}", si.data !== undefined && "error" in si, si);
-  check("data.session.access_token exists", !!si.data?.session?.access_token, si.data);
+  check("data.session.access_token", !!si.data?.session?.access_token, si.data);
+  check("data.session.refresh_token", !!si.data?.session?.refresh_token, si.data?.session);
+  check("data.session.expires_at is number", typeof si.data?.session?.expires_at === "number", si.data?.session);
+  check("data.session.expires_in = 604800", si.data?.session?.expires_in === 604800, si.data?.session);
   check("data.user.email matches", si.data?.user?.email === email, si.data?.user);
+  check("data.user.last_sign_in_at", !!si.data?.user?.last_sign_in_at, si.data?.user);
   console.log(`
 [auth.signInWithPassword - bad creds]`);
   const bad = await db.auth.signInWithPassword({ email, password: "wrong" });
@@ -487,11 +698,13 @@ Testing against ${URL2}
 [auth.getSession]`);
   const gs = await db.auth.getSession();
   check("returns {data,error}", gs.data !== undefined && "error" in gs, gs);
-  check("data.session has token", !!gs.data?.session?.access_token, gs.data);
+  check("data.session.access_token", !!gs.data?.session?.access_token, gs.data);
+  check("data.session.refresh_token", !!gs.data?.session?.refresh_token, gs.data?.session);
   console.log(`
 [auth.updateUser]`);
   const uu = await db.auth.updateUser({ data: { name: "Alice" } });
   check("returns {data,error}", uu.data !== undefined && "error" in uu, uu);
+  check("user_metadata updated", uu.data?.user?.user_metadata?.name === "Alice", uu.data?.user);
   console.log(`
 [auth.onAuthStateChange]`);
   let fired = false;
@@ -567,10 +780,28 @@ Testing against ${URL2}
   check("vec has _distance", typeof vs.data?.[0]?._distance === "number", vs.data?.[0]);
   check("vec limit=2", vs.data?.length === 2, vs.data);
   console.log(`
+[Prefer: return=minimal]`);
+  const minRes = await globalThis.fetch(`${URL2}/rest/v1/${tbl}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ name: "Dave", score: "5" })
+  });
+  check("POST return=minimal \u2192 204", minRes.status === 204, minRes.status);
+  console.log(`
+[Content-Range header]`);
+  const crRes = await globalThis.fetch(`${URL2}/rest/v1/${tbl}?count=exact`);
+  check("Content-Range header present", crRes.headers.has("content-range"), crRes.headers.get("content-range"));
+  console.log(`
 [auth.signOut]`);
   await db.auth.signOut();
   const afterOut = await db.auth.getUser();
   check("getUser after signOut = error", !!afterOut.error, afterOut);
+  console.log(`
+[auth.setSession]`);
+  const ss = await db.auth.setSession({ access_token: "fake", refresh_token: "fake" });
+  check("setSession returns {data,error}", ss.data !== undefined && "error" in ss, ss);
+  const rpf = await db.auth.resetPasswordForEmail("anyone@example.com");
+  check("resetPasswordForEmail stub ok", !rpf.error, rpf);
   console.log(`
 ${"=".repeat(40)}`);
   console.log(`${pass} passed, ${fail} failed`);

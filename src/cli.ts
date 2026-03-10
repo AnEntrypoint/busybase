@@ -115,18 +115,56 @@ else if (cmd === "test") {
 
   console.log(`\nTesting against ${URL}\n`);
 
+  // --- Keypair auth (anonymous-first) ---
+  console.log("[auth.keypair — anonymous sign-in]");
+  const kp1 = await db.auth.keypair.signIn();
+  check("keypair signIn returns {data,error}", kp1.data !== undefined && "error" in kp1, kp1);
+  check("keypair user.id exists", !!kp1.data?.user?.id, kp1.data?.user);
+  check("keypair session.access_token", !!kp1.data?.session?.access_token, kp1.data?.session);
+  check("keypair session.refresh_token", !!kp1.data?.session?.refresh_token, kp1.data?.session);
+  check("keypair session.expires_at is number", typeof kp1.data?.session?.expires_at === "number", kp1.data?.session);
+
+  console.log("\n[auth.keypair — same key = same user]");
+  const exported = db.auth.keypair.export();
+  const db2 = BB(URL, "local");
+  const kp2 = await db2.auth.keypair.restore(exported.privkey!, exported.pubkey!);
+  check("restore returns same user.id", kp2.data?.user?.id === kp1.data?.user?.id, { kp1: kp1.data?.user?.id, kp2: kp2.data?.user?.id });
+
+  console.log("\n[auth.keypair — new keypair = new user]");
+  const db3 = BB(URL, "local");
+  const kp3 = await db3.auth.keypair.signIn();
+  check("different keypair = different user", kp3.data?.user?.id !== kp1.data?.user?.id, { id1: kp1.data?.user?.id, id3: kp3.data?.user?.id });
+
+  console.log("\n[keypair user — progressively add email]");
+  // Sign in as kp1 user (has token in db)
+  const dbKp = BB(URL, "local");
+  await dbKp.auth.keypair.restore(exported.privkey!, exported.pubkey!);
+  const upgr = await dbKp.auth.updateUser({ email: `keypair_${Date.now()}@test.com`, data: { name: "Anon" } });
+  check("updateUser on keypair account works", !!upgr.data?.user?.email, upgr.data);
+  check("metadata stored", upgr.data?.user?.user_metadata?.name === "Anon", upgr.data?.user);
+
   // Auth
-  console.log("[auth.signUp]");
-  const su = await db.auth.signUp({ email: `test_${Date.now()}@bb.com`, password: "pass123" });
+  console.log("\n[auth.signUp]");
+  const rawEmail = `Test_${Date.now()}@BB.com`; // test case normalization
+  const su = await db.auth.signUp({ email: rawEmail, password: "pass123" });
   check("returns {data,error}", su.data !== undefined && "error" in su, su);
   check("data.user has id", !!su.data?.user?.id, su.data);
+  check("email lowercased", su.data?.user?.email === rawEmail.toLowerCase(), su.data?.user);
+  check("user has role=authenticated", su.data?.user?.role === "authenticated", su.data?.user);
+  check("user has user_metadata", typeof su.data?.user?.user_metadata === "object", su.data?.user);
+  check("user has app_metadata", typeof su.data?.user?.app_metadata === "object", su.data?.user);
+  check("user has created_at", !!su.data?.user?.created_at, su.data?.user);
   const email = su.data?.user?.email;
 
   console.log("\n[auth.signInWithPassword]");
   const si = await db.auth.signInWithPassword({ email, password: "pass123" });
   check("returns {data,error}", si.data !== undefined && "error" in si, si);
-  check("data.session.access_token exists", !!si.data?.session?.access_token, si.data);
+  check("data.session.access_token", !!si.data?.session?.access_token, si.data);
+  check("data.session.refresh_token", !!si.data?.session?.refresh_token, si.data?.session);
+  check("data.session.expires_at is number", typeof si.data?.session?.expires_at === "number", si.data?.session);
+  check("data.session.expires_in = 604800", si.data?.session?.expires_in === 604800, si.data?.session);
   check("data.user.email matches", si.data?.user?.email === email, si.data?.user);
+  check("data.user.last_sign_in_at", !!si.data?.user?.last_sign_in_at, si.data?.user);
 
   console.log("\n[auth.signInWithPassword - bad creds]");
   const bad = await db.auth.signInWithPassword({ email, password: "wrong" });
@@ -140,11 +178,13 @@ else if (cmd === "test") {
   console.log("\n[auth.getSession]");
   const gs = await db.auth.getSession();
   check("returns {data,error}", gs.data !== undefined && "error" in gs, gs);
-  check("data.session has token", !!gs.data?.session?.access_token, gs.data);
+  check("data.session.access_token", !!gs.data?.session?.access_token, gs.data);
+  check("data.session.refresh_token", !!gs.data?.session?.refresh_token, gs.data?.session);
 
   console.log("\n[auth.updateUser]");
   const uu = await db.auth.updateUser({ data: { name: "Alice" } });
   check("returns {data,error}", uu.data !== undefined && "error" in uu, uu);
+  check("user_metadata updated", uu.data?.user?.user_metadata?.name === "Alice", uu.data?.user);
 
   console.log("\n[auth.onAuthStateChange]");
   let fired = false;
@@ -233,10 +273,33 @@ else if (cmd === "test") {
   check("vec has _distance", typeof vs.data?.[0]?._distance === "number", vs.data?.[0]);
   check("vec limit=2", vs.data?.length === 2, vs.data);
 
+  // Prefer: return=minimal
+  console.log("\n[Prefer: return=minimal]");
+  const minRes = await globalThis.fetch(`${URL}/rest/v1/${tbl}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify({ name: "Dave", score: "5" }),
+  });
+  check("POST return=minimal → 204", minRes.status === 204, minRes.status);
+
+  // Content-Range header
+  console.log("\n[Content-Range header]");
+  const crRes = await globalThis.fetch(`${URL}/rest/v1/${tbl}?count=exact`);
+  check("Content-Range header present", crRes.headers.has("content-range"), crRes.headers.get("content-range"));
+
   console.log("\n[auth.signOut]");
   await db.auth.signOut();
   const afterOut = await db.auth.getUser();
   check("getUser after signOut = error", !!afterOut.error, afterOut);
+
+  // setSession stub
+  console.log("\n[auth.setSession]");
+  const ss = await db.auth.setSession({ access_token: "fake", refresh_token: "fake" });
+  check("setSession returns {data,error}", ss.data !== undefined && "error" in ss, ss);
+
+  // resetPasswordForEmail stub
+  const rpf = await db.auth.resetPasswordForEmail("anyone@example.com");
+  check("resetPasswordForEmail stub ok", !rpf.error, rpf);
 
   console.log(`\n${"=".repeat(40)}`);
   console.log(`${pass} passed, ${fail} failed`);
