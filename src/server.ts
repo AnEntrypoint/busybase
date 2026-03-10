@@ -340,6 +340,12 @@ Bun.serve({ port: PORT, fetch: async (req) => {
     }
   }
 
+  if (pathname === "/" || pathname === "/gui") {
+    const file = Bun.file(new URL("./gui.html", import.meta.url));
+    if (await file.exists()) return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
+    return err("GUI not found", 404);
+  }
+
   return err("Not found", 404);
 }});
 
