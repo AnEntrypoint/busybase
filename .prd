@@ -1,6 +1,0 @@
-{
-  "project": "busybase",
-  "objective": "Create a Supabase-like HTTP API using Bun with built-in SQLite, publish as AnEntrypoint/busybase, SDK must feel like Supabase",
-  "items": [],
-  "completed": ["create-server", "create-sdk", "test-system", "publish-npm"]
-}
