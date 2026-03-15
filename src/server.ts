@@ -4,8 +4,10 @@ import { broadcastChange, wsHandlers } from "./realtime.ts";
 
 const DIR = process.env.BUSYBASE_DIR || "busybase_data";
 const PORT = process.env.BUSYBASE_PORT || 54321;
+const CORS_ORIGIN = process.env.BUSYBASE_CORS_ORIGIN || "*";
 const Z = [0];
 const SENTINEL = "_sentinel_";
+const esc = (s: string) => s.replace(/'/g, "''");
 
 const vdb = await connect(DIR);
 const tableCache = new Map<string, Table>();
@@ -28,9 +30,7 @@ if (!(await openTbl("_users")))
   await mkTbl("_users", [{ id: SENTINEL, email: SENTINEL, pw: "", pubkey: "", role: "authenticated", meta: "{}", app_meta: "{}", created: "", updated: "", last_sign_in: "", vector: Z }]);
 if (!(await openTbl("_sessions")))
   await mkTbl("_sessions", [{ token: SENTINEL, refresh: SENTINEL, uid: "", exp: 0, vector: Z }]);
-// Nonces for keypair challenge (short-lived, in-memory is fine)
-const nonces = new Map<string, number>(); // nonce -> expiry ms
-// Password reset tokens: token -> { uid, exp }
+const nonces = new Map<string, number>();
 const resetTokens = new Map<string, { uid: string; exp: number }>();
 
 const real = (col = "id") => `${col} != '${SENTINEL}'`;
@@ -38,6 +38,18 @@ const execFilter = async (t: Table, filter: string): Promise<any[]> => {
   try { return await t.filter(filter).execute() as any[]; }
   catch { return []; }
 };
+
+const sweepExpired = async () => {
+  const now = Date.now();
+  for (const [k, exp] of nonces) if (exp < now) nonces.delete(k);
+  for (const [k, v] of resetTokens) if (v.exp < now) resetTokens.delete(k);
+  const st = await openTbl("_sessions");
+  if (st) {
+    const expired = await execFilter(st, `exp < ${now} AND token != '${SENTINEL}'`);
+    for (const s of expired) { try { await st.delete(`token = '${esc(s.token)}'`); } catch {} }
+  }
+};
+setInterval(sweepExpired, 5 * 60_000).unref();
 const getRows = async (name: string, filter: string): Promise<any[]> => {
   const t = await openTbl(name);
   if (!t) return [];
@@ -52,7 +64,7 @@ const getAllRows = async (name: string): Promise<any[]> => {
 const validId = (s: string) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) && s !== "_users" && s !== "_sessions";
 
 const cors = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": CORS_ORIGIN,
   "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type,Authorization,apikey,Prefer",
 };
@@ -71,14 +83,14 @@ const toFilter = (p: Record<string, string>): string => {
     if (k.startsWith("in.")) {
       const col = k.slice(3);
       if (!validId(col)) continue;
-      const list = val.split(",").map(v => `'${v.replace(/'/g, "''")}'`).join(",");
+      const list = val.split(",").map(v => `'${esc(v)}'`).join(",");
       parts.push(`${col} IN (${list})`); continue;
     }
     if (k === "or") {
       const orParts = decodeURIComponent(val).split(",").map(clause => {
         const d1 = clause.indexOf("."), d2 = clause.indexOf(".", d1 + 1);
         if (d1 < 0 || d2 < 0) return null;
-        const col = clause.slice(0, d1), op = clause.slice(d1 + 1, d2), v = clause.slice(d2 + 1).replace(/'/g, "''");
+        const col = clause.slice(0, d1), op = clause.slice(d1 + 1, d2), v = esc(clause.slice(d2 + 1));
         if (!validId(col)) return null;
         const s = op === "eq" ? "=" : op === "neq" ? "!=" : op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : op === "lte" ? "<=" : null;
         return s ? `${col} ${s} '${v}'` : null;
@@ -89,18 +101,21 @@ const toFilter = (p: Record<string, string>): string => {
       const rest = k.slice(4), dot = rest.indexOf(".");
       const col = dot >= 0 ? rest.slice(0, dot) : rest, op = dot >= 0 ? rest.slice(dot + 1) : "eq";
       if (!validId(col)) continue;
-      const safe = val.replace(/'/g, "''");
       const s = op === "eq" ? "=" : op === "neq" ? "!=" : op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : op === "lte" ? "<=" : "=";
-      parts.push(`NOT (${col} ${s} '${safe}')`); continue;
+      parts.push(`NOT (${col} ${s} '${esc(val)}')`); continue;
     }
     const op = k.match(/^(eq|neq|gt|gte|lt|lte|like|ilike|is)\./)?.[1];
     if (!op) continue;
     const col = k.slice(op.length + 1);
     if (!validId(col)) continue;
-    const safe = val.replace(/'/g, "''");
-    if (op === "like" || op === "ilike") parts.push(`${col} LIKE '%${safe}%'`);
-    else if (op === "is") parts.push(`${col} IS ${val}`);
-    else {
+    const safe = esc(val);
+    if (op === "like") parts.push(`${col} LIKE '${safe}'`);
+    else if (op === "ilike") parts.push(`LOWER(${col}) LIKE LOWER('${safe}')`);
+    else if (op === "is") {
+      const upper = val.trim().toUpperCase();
+      if (!["NULL", "TRUE", "FALSE"].includes(upper)) continue;
+      parts.push(`${col} IS ${upper}`);
+    } else {
       const s = op === "eq" ? "=" : op === "neq" ? "!=" : op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : "<=";
       parts.push(`${col} ${s} '${safe}'`);
     }
@@ -136,10 +151,10 @@ const issueSession = async (uid: string) => {
 const getUser = async (r: Request) => {
   const token = r.headers.get("Authorization")?.split(" ")[1];
   if (!token) return null;
-  const sessions = await getRows("_sessions", `token = '${token}'`);
+  const sessions = await getRows("_sessions", `token = '${esc(token)}'`);
   const s = sessions[0];
   if (!s || s.exp < Date.now()) return null;
-  const users = await getRows("_users", `id = '${s.uid}'`);
+  const users = await getRows("_users", `id = '${esc(s.uid)}'`);
   return users[0] ? makeUser(users[0]) : null;
 };
 
@@ -159,7 +174,8 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
 
   const { pathname, searchParams } = new URL(req.url);
   const P = Object.fromEntries(searchParams);
-  const B = await req.json().catch(() => ({}));
+  const hasBody = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE";
+  const B = hasBody ? await req.json().catch(() => ({})) : {};
   const prefer = req.headers.get("Prefer") || "";
   const returnMinimal = prefer.includes("return=minimal");
 
@@ -192,9 +208,8 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
       } catch { return err("Invalid signature", 401); }
       if (!valid) return err("Signature verification failed", 401);
 
-      // Find or create user by pubkey
       const now = new Date().toISOString();
-      let users = await getRows("_users", `pubkey = '${pubkey}'`);
+      let users = await getRows("_users", `pubkey = '${esc(pubkey)}'`);
       let u = users[0];
       const ut = (await openTbl("_users"))!;
       if (!u) {
@@ -204,8 +219,7 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
         const hookErr = await fireHook("onSignup", makeUser(u));
         if (hookErr) return err(hookErr, 400);
       } else {
-        // Update last_sign_in
-        await ut.delete(`id = '${u.id}'`);
+        await ut.delete(`id = '${esc(u.id)}'`);
         u = { ...u, last_sign_in: now, updated: now };
         await ut.add([u]);
       }
@@ -220,7 +234,7 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
     if (action === "signup") {
       if (!B.email || !B.password) return err("Email & password required");
       const emailLower = B.email.toLowerCase();
-      const existing = await getRows("_users", `email = '${emailLower.replace(/'/g, "''")}'`);
+      const existing = await getRows("_users", `email = '${esc(emailLower)}'`);
       if (existing.length) return err("User already registered", 400, "Check if user already exists");
       const now = new Date().toISOString();
       const u = { id: crypto.randomUUID(), email: emailLower, pw: await Bun.password.hash(B.password), pubkey: "", role: "authenticated", meta: JSON.stringify(B.data || {}), app_meta: "{}", created: now, updated: now, last_sign_in: now, vector: Z };
@@ -233,12 +247,12 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
     // --- Email sign-in ---
     if (action === "token") {
       const emailLower = (B.email || "").toLowerCase();
-      const users = await getRows("_users", `email = '${emailLower.replace(/'/g, "''")}'`);
+      const users = await getRows("_users", `email = '${esc(emailLower)}'`);
       const u = users[0];
       if (!u || !await Bun.password.verify(B.password || "", u.pw)) return err("Invalid login credentials", 400);
       const now = new Date().toISOString();
       const ut = (await openTbl("_users"))!;
-      await ut.delete(`id = '${u.id}'`);
+      await ut.delete(`id = '${esc(u.id)}'`);
       await ut.add([{ ...u, last_sign_in: now, updated: now }]);
       const { token, refresh, exp } = await issueSession(u.id);
       const user = makeUser({ ...u, last_sign_in: now, updated: now });
@@ -254,21 +268,21 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
 
     if (action === "logout") {
       const token = req.headers.get("Authorization")?.split(" ")[1];
-      if (token) { const st = await openTbl("_sessions"); if (st) await st.delete(`token = '${token}'`); }
+      if (token) { const st = await openTbl("_sessions"); if (st) await st.delete(`token = '${esc(token)}'`); }
       return ok({});
     }
 
     if (action === "update") {
       const user = await getUser(req);
       if (!user) return err("Not authenticated", 401);
-      const existing = await getRows("_users", `id = '${user.id}'`);
+      const existing = await getRows("_users", `id = '${esc(user.id)}'`);
       const u = existing[0];
       if (!u) return err("User not found", 404);
-      const ut = (await openTbl("_users"))!;
-      await ut.delete(`id = '${u.id}'`);
       const now = new Date().toISOString();
       const newEmail = B.email ? B.email.toLowerCase() : u.email;
       if (B.email && newEmail !== u.email) {
+        const taken = await getRows("_users", `email = '${esc(newEmail)}'`);
+        if (taken.length) return err("Email already in use", 400);
         const emailHookErr = await fireHook("onEmailChange", makeUser(u), newEmail);
         if (emailHookErr) return err(emailHookErr, 400);
       }
@@ -280,6 +294,8 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
         app_meta: JSON.stringify({ ...JSON.parse(u.app_meta || "{}"), ...(B.app_metadata || {}) }),
         updated: now,
       };
+      const ut = (await openTbl("_users"))!;
+      await ut.delete(`id = '${esc(u.id)}'`);
       await ut.add([merged]);
       return ok({ user: makeUser(merged) });
     }
@@ -288,7 +304,7 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
     if (action === "recover") {
       const email = (B.email || "").toLowerCase();
       if (!email) return err("Email required");
-      const users = await getRows("_users", `email = '${email.replace(/'/g, "''")}'`);
+      const users = await getRows("_users", `email = '${esc(email)}'`);
       // Always return ok (don't leak whether email exists)
       if (users[0]) {
         const resetToken = crypto.randomUUID();
@@ -313,11 +329,11 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
         if (!password) return err("New password required");
         resetTokens.delete(token);
         const ut = (await openTbl("_users"))!;
-        const users = await getRows("_users", `id = '${entry.uid}'`);
+        const users = await getRows("_users", `id = '${esc(entry.uid)}'`);
         const u = users[0];
         if (!u) return err("User not found", 404);
         const now = new Date().toISOString();
-        await ut.delete(`id = '${u.id}'`);
+        await ut.delete(`id = '${esc(u.id)}'`);
         await ut.add([{ ...u, pw: await Bun.password.hash(password), updated: now }]);
         const { token: access, refresh, exp } = await issueSession(u.id);
         const user = makeUser({ ...u, updated: now });
@@ -363,15 +379,17 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
         const [col, dir] = P.order.split(".");
         if (validId(col)) rows.sort((a, b) => dir === "desc" ? (b[col] > a[col] ? 1 : -1) : (a[col] > b[col] ? 1 : -1));
       }
-      const limit = P.limit ? parseInt(P.limit) : 1000;
-      const offset = P.offset ? parseInt(P.offset) : 0;
+      const limit = Math.max(0, parseInt(P.limit) || 1000);
+      const offset = Math.max(0, parseInt(P.offset) || 0);
       const page = clean(rows).slice(offset, offset + limit);
+      const rangeEnd = page.length ? offset + page.length - 1 : 0;
+      const rangeStr = page.length ? `${offset}-${rangeEnd}` : `*`;
       const extra: Record<string, string> = {};
       if (P.count === "exact" || prefer.includes("count=exact")) {
-        extra["Content-Range"] = `${offset}-${offset + page.length - 1}/${rows.length}`;
+        extra["Content-Range"] = `${rangeStr}/${rows.length}`;
         return json({ data: page, error: null, count: rows.length }, 200, extra);
       }
-      extra["Content-Range"] = `${offset}-${offset + page.length - 1}/*`;
+      extra["Content-Range"] = `${rangeStr}/*`;
       return ok(page, 200, extra);
     }
 

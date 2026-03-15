@@ -147,7 +147,18 @@ var BB = (url, key) => {
   const from = (table) => ({
     select: (cols = "*") => Q(table).select(cols),
     insert: (data) => wrap(req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]) })),
-    upsert: (data) => wrap(req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]) })),
+    upsert: (data) => {
+      const rows = Array.isArray(data) ? data : [data];
+      const withIds = rows.map(r => ({ ...r, id: r.id ?? crypto.randomUUID() }));
+      const doRow = async (r) => {
+        const existing = await req(`rest/v1/${table}?eq.id=${encodeURIComponent(r.id)}`);
+        if (existing?.data?.length) {
+          return req(`rest/v1/${table}?eq.id=${encodeURIComponent(r.id)}`, { method: "PATCH", body: JSON.stringify(r) });
+        }
+        return req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify([r]) });
+      };
+      return wrap(Promise.all(withIds.map(doRow)).then(results => ({ data: results.flatMap(r => r?.data ?? []), error: null })));
+    },
     update: (data) => Q(table, "PATCH", data),
     delete: () => Q(table, "DELETE", null)
   });
@@ -195,7 +206,39 @@ var BB = (url, key) => {
     },
     keypair
   };
-  return { from, auth };
+  const channels = new Map();
+  const channel = (name) => {
+    const handlers = [];
+    let ws = null;
+    const wsUrl = base.replace(/^http/, "ws") + "/realtime/v1/websocket";
+    const ch = {
+      on: (type, opts, cb) => { handlers.push({ event: opts.event, table: opts.table, cb }); return ch; },
+      subscribe: (statusCb) => {
+        ws = new (globalThis.WebSocket)(wsUrl);
+        ws.onopen = () => {
+          const tables = [...new Set(handlers.map(h => h.table))];
+          for (const t of tables) ws.send(JSON.stringify({ type: "subscribe", table: t }));
+          statusCb?.("SUBSCRIBED");
+        };
+        ws.onmessage = (e) => {
+          try {
+            const msg = JSON.parse(typeof e.data === "string" ? e.data : e.data.toString());
+            for (const h of handlers) {
+              if (h.table === msg.table && (h.event === "*" || h.event === msg.eventType)) h.cb(msg);
+            }
+          } catch {}
+        };
+        ws.onerror = () => statusCb?.("CHANNEL_ERROR");
+        ws.onclose = () => statusCb?.("CLOSED");
+        channels.set(name, ch);
+        return ch;
+      },
+      unsubscribe: () => { ws?.close(); channels.delete(name); },
+    };
+    return ch;
+  };
+  const removeAllChannels = () => { for (const ch of channels.values()) ch.unsubscribe(); };
+  return { from, auth, channel, removeAllChannels };
 };
 var sdk_default = BB;
 export {
