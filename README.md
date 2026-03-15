@@ -28,7 +28,7 @@ Built on [Bun](https://bun.sh) + [LanceDB](https://lancedb.com). Single process.
 | Pluggable hooks (18 hooks) | ✅ | ⚠️ Edge Functions | ⚠️ JS hooks |
 | Zero config startup | ✅ | ❌ | ✅ |
 | Built-in SMTP email | ✅ | ⚠️ external | ✅ |
-| Realtime subscriptions | ❌ | ✅ | ✅ |
+| Realtime subscriptions | ✅ | ✅ | ✅ |
 
 ---
 
@@ -198,6 +198,72 @@ await db.from("articles").select("*").vec([...], 10).eq("category", "pets");
 ```
 
 Works with any embedding model — OpenAI, Ollama, Cohere, local models, etc.
+
+---
+
+## Realtime
+
+Subscribe to table changes via WebSocket — `INSERT`, `UPDATE`, and `DELETE` events are broadcast to all active subscribers.
+
+### WebSocket endpoint
+
+```
+ws://localhost:54321/realtime/v1/websocket
+```
+
+Subscribe to a table by sending a JSON message after connecting:
+
+```json
+{ "type": "subscribe", "table": "todos" }
+```
+
+Unsubscribe:
+
+```json
+{ "type": "unsubscribe", "table": "todos" }
+```
+
+### Event shape
+
+```json
+{
+  "event": "INSERT",
+  "eventType": "INSERT",
+  "table": "todos",
+  "new": { "id": "abc", "title": "Buy milk" },
+  "old": null
+}
+```
+
+`eventType` is one of `INSERT`, `UPDATE`, or `DELETE`. For `UPDATE`, both `new` and `old` are populated. For `DELETE`, `new` is `null`.
+
+### SDK — `channel()` (Supabase-compatible)
+
+```ts
+const db = BB("http://localhost:54321", "local");
+
+const ch = db.channel("todos-changes")
+  .on("postgres_changes", { event: "*", schema: "public", table: "todos" }, (payload) => {
+    console.log(payload.eventType, payload.new, payload.old);
+  })
+  .subscribe((status) => console.log("status:", status));
+
+// Later:
+ch.unsubscribe();
+
+// Tear down all channels:
+db.removeAllChannels();
+```
+
+Filter by event type:
+
+```ts
+db.channel("inserts-only")
+  .on("postgres_changes", { event: "INSERT", schema: "public", table: "todos" }, (payload) => {
+    console.log("New row:", payload.new);
+  })
+  .subscribe();
+```
 
 ---
 
