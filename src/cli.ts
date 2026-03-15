@@ -301,6 +301,70 @@ else if (cmd === "test") {
   const rpf = await db.auth.resetPasswordForEmail("anyone@example.com");
   check("resetPasswordForEmail stub ok", !rpf.error, rpf);
 
+  // --- Realtime ---
+  const rtTbl = `rt_${Date.now()}`;
+  console.log(`\n[realtime — table: ${rtTbl}]`);
+
+  const wsUrl = URL.replace(/^http/, "ws") + "/realtime/v1/websocket";
+  const wsWait = (ws: any, eventName: string): Promise<any> =>
+    new Promise((res, rej) => {
+      const t = setTimeout(() => rej(new Error(`timeout waiting for ${eventName}`)), 3000);
+      ws[`on${eventName}`] = (e: any) => { clearTimeout(t); res(e); };
+    });
+
+  // Test 1: raw WebSocket INSERT event
+  const ws1 = new (globalThis as any).WebSocket(wsUrl);
+  await wsWait(ws1, "open");
+  ws1.send(JSON.stringify({ type: "subscribe", table: rtTbl }));
+  const recv1: Promise<any> = new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error("timeout INSERT event")), 3000);
+    ws1.onmessage = (e: any) => { clearTimeout(t); res(JSON.parse(typeof e.data === "string" ? e.data : e.data.toString())); };
+  });
+  await db.from(rtTbl).insert({ name: "rt_alice", score: "1" });
+  let rtMsg: any;
+  try { rtMsg = await recv1; } catch { rtMsg = null; }
+  check("realtime INSERT event received", rtMsg?.eventType === "INSERT", rtMsg);
+  check("realtime INSERT event.table correct", rtMsg?.table === rtTbl, rtMsg);
+  check("realtime INSERT event.new has name", rtMsg?.new?.name === "rt_alice", rtMsg);
+  check("realtime INSERT event.old is null", rtMsg?.old === null, rtMsg);
+
+  // Test 2: UPDATE event with old/new
+  const recv2: Promise<any> = new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error("timeout UPDATE event")), 3000);
+    ws1.onmessage = (e: any) => { clearTimeout(t); res(JSON.parse(typeof e.data === "string" ? e.data : e.data.toString())); };
+  });
+  await db.from(rtTbl).update({ score: "99" }).eq("name", "rt_alice");
+  let rtUpd: any;
+  try { rtUpd = await recv2; } catch { rtUpd = null; }
+  check("realtime UPDATE event received", rtUpd?.eventType === "UPDATE", rtUpd);
+  check("realtime UPDATE new.score=99", rtUpd?.new?.score === "99", rtUpd);
+  check("realtime UPDATE old.score=1", rtUpd?.old?.score === "1", rtUpd);
+
+  // Test 3: DELETE event
+  const recv3: Promise<any> = new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error("timeout DELETE event")), 3000);
+    ws1.onmessage = (e: any) => { clearTimeout(t); res(JSON.parse(typeof e.data === "string" ? e.data : e.data.toString())); };
+  });
+  await db.from(rtTbl).delete().eq("name", "rt_alice");
+  let rtDel: any;
+  try { rtDel = await recv3; } catch { rtDel = null; }
+  check("realtime DELETE event received", rtDel?.eventType === "DELETE", rtDel);
+  check("realtime DELETE event.new is null", rtDel?.new === null, rtDel);
+  check("realtime DELETE old.name=rt_alice", rtDel?.old?.name === "rt_alice", rtDel);
+  ws1.close();
+
+  // Test 4: SDK channel() subscribe
+  const rtTbl2 = `rt2_${Date.now()}`;
+  const chEvents: any[] = [];
+  const ch = db.channel("test-ch")
+    .on("postgres_changes", { event: "*", schema: "public", table: rtTbl2 }, (payload: any) => chEvents.push(payload))
+    .subscribe();
+  await Bun.sleep(200);
+  await db.from(rtTbl2).insert({ label: "sdk_test" });
+  await Bun.sleep(300);
+  check("SDK channel INSERT event received", chEvents.some(e => e.eventType === "INSERT" && e.new?.label === "sdk_test"), chEvents);
+  ch.unsubscribe();
+
   console.log(`\n${"=".repeat(40)}`);
   console.log(`${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);

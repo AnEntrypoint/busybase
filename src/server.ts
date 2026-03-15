@@ -1,5 +1,6 @@
 import { connect, type Table } from "vectordb";
 import { fireHook, pipeHook, sendEmail, hooks } from "./hooks.ts";
+import { broadcastChange, wsHandlers } from "./realtime.ts";
 
 const DIR = process.env.BUSYBASE_DIR || "busybase_data";
 const PORT = process.env.BUSYBASE_PORT || 54321;
@@ -146,7 +147,11 @@ const getUser = async (r: Request) => {
 const importPubKey = (b64: string) =>
   crypto.subtle.importKey("raw", Uint8Array.from(atob(b64), c => c.charCodeAt(0)), { name: "Ed25519" }, false, ["verify"]);
 
-Bun.serve({ port: PORT, fetch: async (req) => {
+const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req) => {
+  if (req.headers.get("upgrade") === "websocket" && new URL(req.url).pathname === "/realtime/v1/websocket") {
+    const upgraded = server.upgrade(req, { data: { tables: new Set() } });
+    return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
+  }
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
   // --- onRequest middleware ---
@@ -380,6 +385,7 @@ Bun.serve({ port: PORT, fetch: async (req) => {
       let t = await openTbl(table);
       if (!t) t = await mkTbl(table, rows);
       else await t.add(rows);
+      for (const row of clean(rows)) broadcastChange(table, "INSERT", row, null);
       if (returnMinimal) return new Response(null, { status: 204, headers: cors });
       return ok(clean(rows), 201);
     }
@@ -398,6 +404,7 @@ Bun.serve({ port: PORT, fetch: async (req) => {
       let updated = existing.map(r => ({ ...r, ...data, vector: r.vector ?? Z }));
       updated = await pipeHook("afterUpdate", updated, table);
       await t.add(updated);
+      for (let i = 0; i < updated.length; i++) broadcastChange(table, "UPDATE", clean([updated[i]])[0], clean([existing[i]])[0]);
       if (returnMinimal) return new Response(null, { status: 204, headers: cors });
       return ok(clean(updated));
     }
@@ -412,6 +419,7 @@ Bun.serve({ port: PORT, fetch: async (req) => {
       if (preErr) return err(preErr, 400);
       await t.delete(`(${real()}) AND (${filter})`);
       await fireHook("afterDelete", table, toDelete);
+      for (const row of clean(toDelete)) broadcastChange(table, "DELETE", null, row);
       if (returnMinimal) return new Response(null, { status: 204, headers: cors });
       return ok([]);
     }
