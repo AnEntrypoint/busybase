@@ -205,7 +205,46 @@ const BB = (url: string, key: string) => {
     keypair,
   };
 
-  return { from, auth };
+  const channels = new Map<string, any>();
+
+  const channel = (name: string) => {
+    const handlers: Array<{ event: string; table: string; cb: (payload: any) => void }> = [];
+    let ws: any = null;
+    const wsUrl = base.replace(/^http/, "ws") + "/realtime/v1/websocket";
+
+    const ch: any = {
+      on: (type: string, opts: { event: string; schema?: string; table: string }, cb: (payload: any) => void) => {
+        handlers.push({ event: opts.event, table: opts.table, cb });
+        return ch;
+      },
+      subscribe: (statusCb?: (status: string) => void) => {
+        ws = new (globalThis as any).WebSocket(wsUrl);
+        ws.onopen = () => {
+          const tables = [...new Set(handlers.map(h => h.table))];
+          for (const t of tables) ws.send(JSON.stringify({ type: "subscribe", table: t }));
+          statusCb?.("SUBSCRIBED");
+        };
+        ws.onmessage = (e: any) => {
+          try {
+            const msg = JSON.parse(typeof e.data === "string" ? e.data : e.data.toString());
+            for (const h of handlers) {
+              if (h.table === msg.table && (h.event === "*" || h.event === msg.eventType)) h.cb(msg);
+            }
+          } catch {}
+        };
+        ws.onerror = () => statusCb?.("CHANNEL_ERROR");
+        ws.onclose = () => statusCb?.("CLOSED");
+        channels.set(name, ch);
+        return ch;
+      },
+      unsubscribe: () => { ws?.close(); channels.delete(name); },
+    };
+    return ch;
+  };
+
+  const removeAllChannels = () => { for (const ch of channels.values()) ch.unsubscribe(); };
+
+  return { from, auth, channel, removeAllChannels };
 };
 
 export { BB as createClient };
