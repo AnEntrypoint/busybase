@@ -21,15 +21,17 @@ export interface Hooks {
   onRequest?: (req: Request) => Response | void | Promise<Response | void>;
 
   // --- Row-level middleware ---
-  // Return modified rows, { error } to abort, or void to pass through
+  // fireHook: return { error } string to abort, or void to pass through
+  // pipeHook: return modified value (rows/params) or void to pass through unchanged
+  // Calling convention: pipeHook(name, value, table) → fn(value, table)
   beforeInsert?: (table: string, rows: any[]) => any;
-  afterInsert?:  (table: string, rows: any[]) => any;
+  afterInsert?:  (rows: any[], table: string) => any;
   beforeUpdate?: (table: string, rows: any[], changes: any) => any;
-  afterUpdate?:  (table: string, rows: any[]) => any;
+  afterUpdate?:  (rows: any[], table: string) => any;
   beforeDelete?: (table: string, rows: any[]) => any;
   afterDelete?:  (table: string, rows: any[]) => any;
-  beforeSelect?: (table: string, params: Record<string, string>) => any;
-  afterSelect?:  (table: string, rows: any[]) => any;
+  beforeSelect?: (params: Record<string, string>, table: string) => any;
+  afterSelect?:  (rows: any[], table: string) => any;
 
   // --- Email: override built-in SMTP entirely ---
   sendEmail?: (opts: { to: string; subject: string; html: string; text?: string }) => any;
