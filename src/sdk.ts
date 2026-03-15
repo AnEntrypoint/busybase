@@ -159,7 +159,18 @@ const BB = (url: string, key: string) => {
   const from = (table: string) => ({
     select:  (cols = "*") => Q(table).select(cols),
     insert:  (data: any) => wrap(req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]) })),
-    upsert:  (data: any) => wrap(req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify(Array.isArray(data) ? data : [data]) })),
+    upsert:  (data: any) => {
+      const rows = (Array.isArray(data) ? data : [data]);
+      const withIds = rows.map(r => ({ ...r, id: r.id ?? crypto.randomUUID() }));
+      const doRow = async (r: any) => {
+        const existing = await req(`rest/v1/${table}?eq.id=${encodeURIComponent(r.id)}`);
+        if (existing?.data?.length) {
+          return req(`rest/v1/${table}?eq.id=${encodeURIComponent(r.id)}`, { method: "PATCH", body: JSON.stringify(r) });
+        }
+        return req(`rest/v1/${table}`, { method: "POST", body: JSON.stringify([r]) });
+      };
+      return wrap(Promise.all(withIds.map(doRow)).then(results => ({ data: results.flatMap((r: any) => r?.data ?? []), error: null })));
+    },
     update:  (data: any) => Q(table, "PATCH", data),
     delete:  () => Q(table, "DELETE", null),
   });
