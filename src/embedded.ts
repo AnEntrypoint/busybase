@@ -362,8 +362,10 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
 
     signOut: async () => {
       if (currentToken) {
+        const user = await getSessionUser(currentToken);
         const st = await openTbl("_sessions");
         if (st) await st.delete(`token = '${esc(currentToken)}'`);
+        if (user) await fireHook("onSignout", user);
       }
       currentToken = null;
       currentSession = null;
@@ -386,9 +388,14 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
       const u = existing[0];
       if (!u) return err("User not found", 404);
       const now = new Date().toISOString();
+      const newEmail = attrs.email ? attrs.email.toLowerCase() : u.email;
+      if (attrs.email && newEmail !== u.email) {
+        const emailHookErr = await fireHook("onEmailChange", makeUser(u), newEmail);
+        if (emailHookErr) return err(emailHookErr);
+      }
       const merged = {
         ...u,
-        email: attrs.email ? attrs.email.toLowerCase() : u.email,
+        email: newEmail,
         pw: attrs.password ? await Bun.password.hash(attrs.password) : u.pw,
         meta: JSON.stringify({ ...JSON.parse(u.meta || "{}"), ...(attrs.data || {}) }),
         updated: now,
@@ -396,6 +403,8 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
       const ut = (await openTbl("_users"))!;
       await ut.delete(`id = '${esc(u.id)}'`);
       await ut.add([merged]);
+      const changes = { email: attrs.email, password: attrs.password ? '***' : undefined, data: attrs.data };
+      await fireHook("onUserUpdate", makeUser(merged), changes);
       emitAuth("USER_UPDATED", currentSession);
       return ok({ user: makeUser(merged) });
     },

@@ -1,3 +1,15 @@
+/**
+ * BusyBase SDK — Supabase-compatible client for BusyBase servers.
+ * Works in browsers, Bun, and Node.js with zero dependencies.
+ *
+ * @example
+ * import BB from "busybase";
+ * const db = BB("http://localhost:54321", "local");
+ * await db.auth.keypair.signIn();
+ * await db.from("todos").insert({ title: "Buy milk" });
+ * const { data } = await db.from("todos").select("*").eq("done", false);
+ */
+
 // Ed25519 helpers — uses Web Crypto API (built into Bun + all modern browsers, zero deps)
 const b64 = (buf: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(buf)));
 const unb64 = (s: string) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -22,6 +34,12 @@ const makeStore = () => {
   catch { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => m.set(k, v), removeItem: (k: string) => m.delete(k) }; }
 };
 
+/**
+ * Create a BusyBase client instance.
+ * @param {string} url - BusyBase server URL (e.g. "http://localhost:54321")
+ * @param {string} key - API key (use "local" for local development)
+ * @returns {{ from: function, auth: object, channel: function, removeAllChannels: function }}
+ */
 const BB = (url: string, key: string) => {
   let token: string | null = null;
   let session: any = null;

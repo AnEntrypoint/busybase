@@ -458,4 +458,10 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
   return err("Not found", 404);
 }});
 
-console.log(`🚀 BusyBase: http://localhost:${PORT}`);
+const hooksStatus = process.env.BUSYBASE_HOOKS ? `${process.env.BUSYBASE_HOOKS}` : 'none';
+const corsStatus = CORS_ORIGIN === '*' ? 'all origins' : CORS_ORIGIN;
+console.log(`[BusyBase] Server ready
+  [CONFIG] url:     http://localhost:${PORT}
+  [CONFIG] data:    ${DIR}
+  [CONFIG] cors:    ${corsStatus}
+  [CONFIG] hooks:   ${hooksStatus}`);
