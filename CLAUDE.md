@@ -15,8 +15,8 @@ BusyBase is a Supabase-compatible REST/WebSocket database server backed by Lance
 - `embedded.ts` — In-process LanceDB mode. Use `createEmbedded({ dir })` for zero-config local usage.
 - `cli.ts` — CLI: `busybase serve`, `busybase test`, plus table/auth commands.
 
-### No Build Step
-The `.js` compiled artifacts are deleted. Bun runs `.ts` files directly. `package.json` exports and `bin` point to `.ts` sources.
+### Build Step
+Run `bun run build` to compile `.ts` sources to `.js` artifacts in `src/`. The `package.json` exports and `bin` point to the built `.js` files. The GitHub Actions publish workflow runs all build steps before `npm publish`. When developing locally with Bun, run `bun run src/cli.ts` directly — the build is only needed for npm publishing.
 
 ## Configuration (Environment Variables)
 - `BUSYBASE_DIR` — Data directory (default: `busybase_data`)
