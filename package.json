@@ -3,26 +3,27 @@
   "version": "1.0.0",
   "type": "module",
   "description": "HTTP SQLite database that feels like Supabase — drop-in headless backend powered by Bun",
-  "main": "./src/sdk.js",
-  "module": "./src/sdk.js",
+  "main": "./src/sdk.ts",
+  "module": "./src/sdk.ts",
   "exports": {
-    ".": "./src/sdk.js",
-    "./embedded": "./src/embedded.js",
+    ".": "./src/sdk.ts",
+    "./embedded": "./src/embedded.ts",
     "./server": "./src/server.ts"
   },
   "bin": {
-    "busybase": "./src/cli.js"
+    "busybase": "./src/cli.ts"
   },
   "scripts": {
     "start": "bun run src/cli.ts serve",
-    "test": "bun run src/cli.ts test",
-    "build": "bun build src/server.ts --target=bun --outfile=src/server.js --external vectordb && bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js && bun build src/cli.ts --target=bun --outfile=src/cli.js --external vectordb && bun build src/embedded.ts --target=bun --outfile=src/embedded.js --external vectordb"
+    "test": "bun run src/cli.ts test"
   },
   "files": [
-    "src/server.js",
-    "src/sdk.js",
-    "src/cli.js",
-    "src/embedded.js"
+    "src/server.ts",
+    "src/sdk.ts",
+    "src/cli.ts",
+    "src/embedded.ts",
+    "src/hooks.ts",
+    "src/realtime.ts"
   ],
   "dependencies": {
     "vectordb": "^0.21.2"
