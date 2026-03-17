@@ -24,7 +24,8 @@
     "src/cli.js",
     "src/embedded.js",
     "src/hooks.js",
-    "src/realtime.js"
+    "src/realtime.js",
+    "studio/"
   ],
   "publishConfig": {
     "access": "public"

@@ -34,3 +34,24 @@ Return `{ error: string }` from any hook to abort the operation. Return a transf
 
 ## Embedded Mode
 `import { createEmbedded } from 'busybase/embedded'` — returns a client with the same interface as the HTTP SDK but running in-process. Used by zellous for zero-config local deployment.
+
+## Studio
+
+BusyBase Studio is a zero-dependency browser UI served directly from the running server at `/studio`.
+
+### Studio Files (studio/)
+- `index.html` — Shell: sidebar nav (Tables/Auth/Realtime/SQL/Settings), dynamically loads panel modules into `#app` via ES module imports. No build step.
+- `tables.js` — Table browser: lists tables via `/studio/api/tables`, shows rows, supports inline cell edit, add row, delete row.
+- `auth.js` — User management: lists users from `/rest/v1/_users`, create user form posting to `/auth/v1/signup`.
+- `realtime.js` — Live event log: WebSocket connection to `/realtime/v1/websocket`, scrolling log of INSERT/UPDATE/DELETE events with timestamp and payload.
+- `sql.js` — Query panel: table dropdown, LanceDB filter syntax input, Run button, results table.
+- `settings.js` — Config viewer: fetches `/studio/config`, shows env var table and SDK usage snippet.
+
+### Studio Server Routes (server.ts)
+- `GET /studio` or `/studio/` — serves `studio/index.html`
+- `GET /studio/*.js` — serves studio JS panel files
+- `GET /studio/config` — returns `{ BUSYBASE_DIR, BUSYBASE_PORT, BUSYBASE_CORS_ORIGIN }` (no secrets)
+- `GET /studio/api/tables` — returns `{ data: string[] }` of all table names via `tableNames()` from db.ts
+
+### GitHub Pages (docs/)
+- `docs/index.html` — Marketing site: hero, features grid, comparison table vs Supabase, quick start code tabs, footer. Pure HTML/CSS/JS, no build step. Deployed via GitHub Pages.
