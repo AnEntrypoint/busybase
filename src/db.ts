@@ -91,6 +91,8 @@ export const getUser = async (r: Request) => {
   return users[0] ? makeUser(users[0]) : null;
 };
 
+export const tableNames = async (): Promise<string[]> => vdb.tableNames();
+
 export const toFilter = (p: Record<string, string>): string => {
   const skip = new Set(["select", "order", "limit", "offset", "vec", "count"]);
   const parts: string[] = [];
