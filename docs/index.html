@@ -51,6 +51,7 @@ footer{padding:2.5rem 2rem;max-width:1100px;margin:0 auto;display:flex;align-ite
   <a href="index.html" class="logo">BusyBase</a>
   <ul class="nav-links">
     <li><a href="#features">Features</a></li><li><a href="#quickstart">Quick Start</a></li>
+    <li><a href="#auth">Auth</a></li><li><a href="#vectors">Vectors</a></li><li><a href="#realtime">Realtime</a></li>
     <li><a href="#compare">Compare</a></li><li><a href="docs.html">Docs</a></li>
     <li><a href="https://github.com/AnEntrypoint/busybase" target="_blank" class="cta-btn">GitHub</a></li>
   </ul>
@@ -76,6 +77,8 @@ footer{padding:2.5rem 2rem;max-width:1100px;margin:0 auto;display:flex;align-ite
     <div class="card"><div class="card-icon">&#129504;</div><div class="card-title">Native Vector Search</div><div class="card-desc">Store embeddings, query by semantic similarity. Works with any model.</div><span class="tag">LanceDB ANN</span></div>
     <div class="card"><div class="card-icon">&#128295;</div><div class="card-title">Studio UI</div><div class="card-desc">Built-in browser UI at /studio — browse tables, manage users, watch realtime events.</div><span class="tag">/studio</span></div>
     <div class="card"><div class="card-icon">&#128193;</div><div class="card-title">File-Based Storage</div><div class="card-desc">LanceDB stores data as Arrow files. Back up with cp -r. No migrations.</div><span class="tag">LanceDB &middot; Arrow</span></div>
+    <div class="card"><div class="card-icon">&#9889;</div><div class="card-title">Realtime Events</div><div class="card-desc">WebSocket subscriptions for INSERT, UPDATE, DELETE. Supabase-compatible channel API.</div><span class="tag">WebSocket</span></div>
+    <div class="card"><div class="card-icon">&#128230;</div><div class="card-title">Embedded Mode</div><div class="card-desc">Run in-process with no HTTP server. Same API for CLI tools, desktop apps, serverless.</div><span class="tag">busybase/embedded</span></div>
   </div>
 </section>
 <hr><section id="quickstart">
@@ -99,6 +102,96 @@ await db.from('todos').update({ done: true }).eq('title', 'Buy milk');
 # 4. Open Studio UI
 open http://localhost:54321/studio</pre>
 </section>
+<hr><section id="auth">
+  <div class="label">Authentication</div>
+  <h2>Two auth modes. Zero friction.</h2>
+  <p class="desc">Start with anonymous keypair auth, upgrade to email/password when ready.</p>
+  <div class="grid" style="grid-template-columns:1fr 1fr">
+    <div>
+      <pre style="margin-bottom:1rem">// Keypair auth (anonymous-first)
+const db = BB('http://localhost:54321', 'local');
+
+// Auto-generates Ed25519 keypair
+await db.auth.signIn();
+
+// Same key = same user, every time
+// Export keys for backup
+const keys = db.auth.keypair.export();
+
+// Restore on another device
+await db.auth.keypair.restore(
+  keys.privkey, keys.pubkey
+);</pre>
+    </div>
+    <div>
+      <pre>// Email/password auth
+await db.auth.signUp({
+  email: 'user@example.com',
+  password: 'secure123',
+  options: { data: { name: 'Alice' } }
+});
+
+await db.auth.signInWithPassword({
+  email: 'user@example.com',
+  password: 'secure123'
+});
+
+const { data } = await db.auth.getUser();
+await db.auth.signOut();</pre>
+    </div>
+  </div>
+</section>
+<hr><section id="vectors">
+  <div class="label">Vector Search</div>
+  <h2>Semantic search built in.</h2>
+  <p class="desc">Store embeddings alongside your data. Query by similarity with a single method call.</p>
+  <pre>// Insert with vector embeddings
+await db.from('articles').insert([
+  { title: 'Bun runtime',  vector: [0.9, 0.1, 0.0, 0.0] },
+  { title: 'Node.js',      vector: [0.7, 0.3, 0.0, 0.0] },
+  { title: 'PostgreSQL',   vector: [0.0, 0.0, 0.8, 0.2] },
+]);
+
+// Find nearest neighbors — returns results with _distance
+const { data } = await db.from('articles').select('*').vec([0.9, 0.1, 0, 0], 2);
+// data[0].title === 'Bun runtime', data[0]._distance === 0
+
+// Combine with filters
+const { data: filtered } = await db.from('articles')
+  .select('*').eq('category', 'js').vec(embedding, 5);</pre>
+</section>
+<hr><section id="realtime">
+  <div class="label">Realtime</div>
+  <h2>Live updates over WebSocket.</h2>
+  <p class="desc">Subscribe to INSERT, UPDATE, and DELETE events. Supabase-compatible channel API.</p>
+  <pre>// Subscribe to changes on a table
+const channel = db.channel('my-channel')
+  .on('postgres_changes',
+    { event: '*', schema: 'public', table: 'todos' },
+    (payload) => {
+      console.log(payload.eventType); // INSERT | UPDATE | DELETE
+      console.log(payload.new);       // new row data
+      console.log(payload.old);       // previous row data
+    })
+  .subscribe((status) => console.log(status)); // "SUBSCRIBED"
+
+// Cleanup
+channel.unsubscribe();
+db.removeAllChannels();</pre>
+</section>
+<hr><section id="embedded">
+  <div class="label">Embedded Mode</div>
+  <h2>No server needed.</h2>
+  <p class="desc">Run BusyBase in-process for CLI tools, desktop apps, or serverless functions.</p>
+  <pre>import { createEmbedded } from 'busybase/embedded';
+
+const db = await createEmbedded({ dir: './my-data' });
+
+// Same API — no HTTP, no ports, no network
+await db.from('todos').insert({ title: 'Local task' });
+const { data } = await db.from('todos').select('*');
+await db.auth.signUp({ email: 'a@b.com', password: 'pass' });</pre>
+</section>
 <hr><section id="compare">
   <div class="label">Comparison</div>
   <h2>How does BusyBase stack up?</h2>
@@ -114,6 +207,9 @@ open http://localhost:54321/studio</pre>
       <tr><td>File-based storage</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="ok">&#10003;</span></td></tr>
       <tr><td>Built-in Studio UI</td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td></tr>
       <tr><td>Zero config startup</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="ok">&#10003;</span></td></tr>
+      <tr><td>Realtime (WebSocket)</td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td></tr>
+      <tr><td>Embedded (in-process) mode</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="no">&#10007;</span></td></tr>
+      <tr><td>Hooks / middleware</td><td><span class="ok">&#10003;</span></td><td><span class="half">~ (RLS)</span></td><td><span class="ok">&#10003;</span></td></tr>
     </tbody>
   </table></div>
 </section>
