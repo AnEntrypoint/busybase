@@ -20,8 +20,8 @@ export const sweepExpired = async () => {
   for (const [k, v] of resetTokens) if (v.exp < now) resetTokens.delete(k);
   const st = await openTbl("_sessions");
   if (st) {
-    const expired = (await st.filter(`exp < ${now} AND token != '${SENTINEL}'`).execute() as any[]).catch?.(() => []) ?? await st.filter(`exp < ${now} AND token != '${SENTINEL}'`).execute().catch(() => []);
-    for (const s of (expired as any[])) { try { await st.delete(`token = '${esc(s.token)}'`); } catch {} }
+    const expired = await st.filter(`exp < ${now} AND token != '${SENTINEL}'`).execute().catch(() => []) as any[];
+    for (const s of expired) { try { await st.delete(`token = '${esc(s.token)}'`); } catch {} }
   }
 };
 

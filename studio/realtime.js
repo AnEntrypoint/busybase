@@ -31,28 +31,33 @@ export function render(container) {
     });
   };
 
+  const subscribeToTables = async () => {
+    const r = await fetch('/studio/api/tables');
+    if (!r.ok) return;
+    const j = await r.json();
+    const tables = (j.data || []).filter(t => !t.startsWith('_'));
+    for (const t of tables) ws.send(JSON.stringify({ type: 'subscribe', table: t }));
+  };
+
   const connect = () => {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${proto}//${location.host}/realtime/v1/websocket`);
     ws.onopen = () => {
       connected = true;
-      ws.send(JSON.stringify({ type: 'phx_join', topic: 'realtime:*', event: 'phx_join', payload: {}, ref: '1' }));
+      subscribeToTables();
       draw();
     };
     ws.onmessage = e => {
       try {
         const msg = JSON.parse(e.data);
-        if (msg.payload && msg.event !== 'phx_reply' && msg.event !== 'heartbeat') {
-          const pl = msg.payload;
-          events.unshift({
-            ts: new Date().toLocaleTimeString(),
-            type: pl.type || msg.event,
-            table: pl.table || (msg.topic||'').replace('realtime:',''),
-            payload: pl.record || pl.old_record || pl
-          });
-          if (events.length > 200) events = events.slice(0, 200);
-          draw();
-        }
+        events.unshift({
+          ts: new Date().toLocaleTimeString(),
+          type: msg.eventType || msg.event,
+          table: msg.table || '',
+          payload: msg.new || msg.old || msg
+        });
+        if (events.length > 200) events = events.slice(0, 200);
+        draw();
       } catch {}
     };
     ws.onclose = () => { connected = false; ws = null; draw(); };
