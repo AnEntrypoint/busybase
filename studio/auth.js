@@ -2,10 +2,10 @@ export async function render(container) {
   let users = [], email = '', password = '', message = '';
 
   const loadUsers = async () => {
-    const r = await fetch('/rest/v1/_users');
+    const r = await fetch('/studio/api/users');
     if (!r.ok) { users = []; return; }
     const j = await r.json();
-    users = (j.data || []).filter(u => u.id !== '_sentinel_');
+    users = j.data || [];
   };
 
   const draw = () => {

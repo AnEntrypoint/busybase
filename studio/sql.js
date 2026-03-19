@@ -5,14 +5,14 @@ export async function render(container) {
     const r = await fetch('/studio/api/tables');
     if (!r.ok) return;
     const j = await r.json();
-    tables = (j.data || []).filter(t => t !== '_sentinel_');
+    tables = (j.data || []).filter(t => !t.startsWith('_'));
     if (tables.length > 0 && !selected) selected = tables[0];
   };
 
   const runQuery = async () => {
     if (!selected) return;
     loading = true; error = null; draw();
-    const url = filter.trim() ? `/rest/v1/${selected}?${encodeURIComponent(filter.trim())}` : `/rest/v1/${selected}`;
+    const url = filter.trim() ? `/rest/v1/${selected}?${filter.trim()}` : `/rest/v1/${selected}`;
     const r = await fetch(url);
     const j = await r.json();
     if (j.error) { error = j.error.message; rows = []; cols = []; }
