@@ -218,7 +218,7 @@ else if (cmd === "test") {
   const fin = await db.from(tbl).select("*").in("name", ["Alice", "Bob"]);
   check(".in — 2 rows", fin.data?.length === 2, fin.data);
 
-  const flike = await db.from(tbl).select("*").like("name", "Ali");
+  const flike = await db.from(tbl).select("*").like("name", "Ali%");
   check(".like — 1 row", flike.data?.length === 1, flike.data);
 
   const for_ = await db.from(tbl).select("*").or("name.eq.Alice,name.eq.Bob");
