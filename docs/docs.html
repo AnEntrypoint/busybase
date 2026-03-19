@@ -615,6 +615,9 @@
       <div class="sidebar-section-label">Features</div>
       <ul class="sidebar-items">
         <li><a href="#vector-search">Vector Search</a></li>
+        <li><a href="#realtime">Realtime (WebSocket)</a></li>
+        <li><a href="#studio">Studio UI</a></li>
+        <li><a href="#embedded">Embedded Mode</a></li>
         <li><a href="#hooks">Hooks System</a></li>
         <li><a href="#email-smtp">Email / SMTP</a></li>
       </ul>
@@ -1245,6 +1248,174 @@ const { data: results } = await db.from("knowledge")
 <pre><code class="language-bash"># GET /rest/v1/:table?vec=[...]&limit=5
 curl "http://localhost:54321/rest/v1/articles?vec=%5B0.9%2C0.1%2C0.0%2C0.0%5D&limit=3"
 # Returns sorted by _distance ascending</code></pre>
+    </div>
+
+    <!-- ── Realtime (WebSocket) ── -->
+    <div class="doc-section" id="realtime">
+      <h2>Realtime (WebSocket)</h2>
+      <p>BusyBase supports real-time subscriptions over WebSocket, compatible with the Supabase <code>channel()</code> API pattern. Clients receive <code>INSERT</code>, <code>UPDATE</code>, and <code>DELETE</code> events as they happen.</p>
+
+      <div class="callout tip">
+        <div class="callout-title">Supabase-compatible</div>
+        The SDK's <code>channel().on().subscribe()</code> API mirrors Supabase's realtime interface. Switch your URL and existing realtime code works.
+      </div>
+
+      <h3>WebSocket endpoint</h3>
+      <p>Connect to <code>ws://localhost:54321/realtime/v1/websocket</code>. Send JSON messages to subscribe/unsubscribe:</p>
+<pre><code class="language-typescript">// Raw WebSocket usage
+const ws = new WebSocket("ws://localhost:54321/realtime/v1/websocket");
+
+// Subscribe to a table
+ws.send(JSON.stringify({ type: "subscribe", table: "todos" }));
+
+// Receive events
+ws.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  // msg.eventType: "INSERT" | "UPDATE" | "DELETE"
+  // msg.table: "todos"
+  // msg.new: { id, title, done, ... } | null
+  // msg.old: { id, title, done, ... } | null
+  console.log(msg.eventType, msg.new, msg.old);
+};
+
+// Unsubscribe
+ws.send(JSON.stringify({ type: "unsubscribe", table: "todos" }));</code></pre>
+
+      <h3>SDK channel API</h3>
+<pre><code class="language-typescript">import { createClient } from "busybase";
+const db = createClient("http://localhost:54321", "local");
+
+// Subscribe to all changes on "todos"
+const channel = db.channel("my-channel")
+  .on("postgres_changes", { event: "*", schema: "public", table: "todos" },
+    (payload) => {
+      console.log(payload.eventType); // INSERT, UPDATE, or DELETE
+      console.log(payload.new);       // new row (null on DELETE)
+      console.log(payload.old);       // old row (null on INSERT)
+    })
+  .subscribe((status) => {
+    console.log("Channel status:", status); // "SUBSCRIBED"
+  });
+
+// Filter by event type
+db.channel("inserts-only")
+  .on("postgres_changes", { event: "INSERT", schema: "public", table: "todos" },
+    (payload) => console.log("New todo:", payload.new))
+  .subscribe();
+
+// Cleanup
+channel.unsubscribe();
+db.removeAllChannels();</code></pre>
+
+      <h3>Event payload shape</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>event</code></td><td>string</td><td>Same as eventType</td></tr>
+            <tr><td><code>eventType</code></td><td>"INSERT" | "UPDATE" | "DELETE"</td><td>The type of change</td></tr>
+            <tr><td><code>table</code></td><td>string</td><td>Table that changed</td></tr>
+            <tr><td><code>new</code></td><td>object | null</td><td>New row data (null on DELETE)</td></tr>
+            <tr><td><code>old</code></td><td>object | null</td><td>Previous row data (null on INSERT)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── Studio UI ── -->
+    <div class="doc-section" id="studio">
+      <h2>Studio UI</h2>
+      <p>BusyBase includes a zero-dependency browser UI served directly from the running server. Access it at <code>http://localhost:54321/studio</code>.</p>
+
+      <h3>Panels</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Panel</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Tables</strong></td><td>Browse all tables, view rows, inline edit cells, add/delete rows</td></tr>
+            <tr><td><strong>Auth</strong></td><td>List users from <code>_users</code>, create new users via signup form</td></tr>
+            <tr><td><strong>Realtime</strong></td><td>Live event log — see INSERT/UPDATE/DELETE events in real time via WebSocket</td></tr>
+            <tr><td><strong>SQL</strong></td><td>Query panel with table dropdown and LanceDB filter syntax input</td></tr>
+            <tr><td><strong>Settings</strong></td><td>View current config (env vars, no secrets exposed) and SDK usage snippet</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Studio API routes</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Route</th><th>Response</th></tr></thead>
+          <tbody>
+            <tr><td><code>GET /studio</code></td><td>Serves the Studio HTML shell</td></tr>
+            <tr><td><code>GET /studio/*.js</code></td><td>Serves panel JavaScript modules</td></tr>
+            <tr><td><code>GET /studio/config</code></td><td>Returns <code>{ BUSYBASE_DIR, BUSYBASE_PORT, BUSYBASE_CORS_ORIGIN }</code> (no secrets)</td></tr>
+            <tr><td><code>GET /studio/api/tables</code></td><td>Returns <code>{ data: string[] }</code> of all table names</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout warning">
+        <div class="callout-title">Security note</div>
+        Studio does not require authentication. In production, restrict access via a reverse proxy or firewall.
+      </div>
+    </div>
+
+    <!-- ── Embedded Mode ── -->
+    <div class="doc-section" id="embedded">
+      <h2>Embedded Mode</h2>
+      <p>BusyBase can run entirely in-process with no HTTP server. Use <code>createEmbedded()</code> for zero-config local usage — same API as the HTTP SDK but operating directly on LanceDB.</p>
+
+      <h3>Setup</h3>
+<pre><code class="language-typescript">import { createEmbedded } from "busybase/embedded";
+
+const db = await createEmbedded({ dir: "./my-data" });
+
+// Same API as the HTTP client:
+await db.from("todos").insert({ title: "Buy milk", done: false });
+const { data } = await db.from("todos").select("*").eq("done", false);
+
+// Auth works too:
+await db.auth.signUp({ email: "user@test.com", password: "pass123" });
+const { data: session } = await db.auth.signInWithPassword({
+  email: "user@test.com", password: "pass123"
+});</code></pre>
+
+      <h3>Configuration</h3>
+<pre><code class="language-typescript">interface EmbeddedConfig {
+  dir?: string;    // Data directory (default: "busybase_data")
+  hooks?: Hooks;   // Hook functions (same interface as BUSYBASE_HOOKS file)
+}</code></pre>
+
+      <h3>Realtime in embedded mode</h3>
+      <p>Realtime events fire via Node.js <code>EventEmitter</code> instead of WebSocket:</p>
+<pre><code class="language-typescript">const db = await createEmbedded();
+
+db.channel("my-channel")
+  .on("postgres_changes", { event: "*", schema: "public", table: "todos" },
+    (payload) => console.log(payload.eventType, payload.new))
+  .subscribe((status) => console.log(status)); // "SUBSCRIBED"
+
+await db.from("todos").insert({ title: "Test" });
+// Logs: INSERT { id: "...", title: "Test" }</code></pre>
+
+      <h3>Hooks in embedded mode</h3>
+<pre><code class="language-typescript">import type { Hooks } from "busybase/hooks";
+
+const hooks: Hooks = {
+  beforeInsert: (table, rows) => {
+    if (table === "protected") return { error: "Cannot insert into protected table" };
+  },
+  canAccess: ({ user, table, method }) => {
+    if (!user && table !== "public") return { error: "Auth required" };
+  }
+};
+
+const db = await createEmbedded({ hooks });</code></pre>
+
+      <div class="callout tip">
+        <div class="callout-title">When to use embedded mode</div>
+        Use embedded mode for CLI tools, desktop apps, serverless functions, or any context where running a separate HTTP server is unnecessary. The same data directory can be shared between embedded and server modes (but not simultaneously).
+      </div>
     </div>
 
     <!-- ── Hooks System ── -->
