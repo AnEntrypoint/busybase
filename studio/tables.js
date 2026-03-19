@@ -4,7 +4,7 @@ async function fetchTables() {
   const r = await fetch('/studio/api/tables');
   if (!r.ok) return [];
   const j = await r.json();
-  return (j.data || []).filter(t => t !== '_sentinel_');
+  return (j.data || []).filter(t => !t.startsWith('_'));
 }
 
 async function fetchRows(table) {

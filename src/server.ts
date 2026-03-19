@@ -1,6 +1,6 @@
 import { hooks } from "./hooks.ts";
 import { wsHandlers } from "./realtime.ts";
-import { cors, err, tableNames } from "./db.ts";
+import { cors, err, tableNames, getAllRows, clean } from "./db.ts";
 import { initAuthTables, sweepExpired, handleAuth } from "./auth.ts";
 import { handleRest } from "./rest.ts";
 
@@ -46,6 +46,11 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
   if (pathname === "/studio/api/tables") {
     const data = await tableNames();
     return Response.json({ data, error: null }, { headers: cors });
+  }
+
+  if (pathname === "/studio/api/users") {
+    const rows = await getAllRows("_users");
+    return Response.json({ data: clean(rows), error: null }, { headers: cors });
   }
 
   if (pathname === "/studio" || pathname === "/studio/") {
