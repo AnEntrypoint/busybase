@@ -143,6 +143,19 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
   const toFilter = (filters: string[]): string => {
     const parts: string[] = [];
     for (const f of filters) {
+      if (f.startsWith("or=")) {
+        const clause = f.slice(3);
+        const orParts = clause.split(",").map(c => {
+          const d1 = c.indexOf("."), d2 = c.indexOf(".", d1 + 1);
+          if (d1 < 0 || d2 < 0) return null;
+          const col = c.slice(0, d1), cop = c.slice(d1 + 1, d2), v = esc(c.slice(d2 + 1));
+          if (!validId(col)) return null;
+          const s = cop === "eq" ? "=" : cop === "neq" ? "!=" : cop === "gt" ? ">" : cop === "gte" ? ">=" : cop === "lt" ? "<" : cop === "lte" ? "<=" : null;
+          return s ? `${sqlCol(col)} ${s} '${v}'` : null;
+        }).filter(Boolean);
+        if (orParts.length) parts.push(`(${orParts.join(" OR ")})`);
+        continue;
+      }
       const dot = f.indexOf(".");
       if (dot < 0) continue;
       const op = f.slice(0, dot), rest = f.slice(dot + 1);
@@ -165,17 +178,22 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
         const col = rest.slice(0, eqPos), val = rest.slice(eqPos + 1).trim().toUpperCase();
         if (!validId(col) || !["NULL", "TRUE", "FALSE"].includes(val)) continue;
         parts.push(`${sqlCol(col)} IS ${val}`);
-      } else if (op.startsWith("in.")) {
-        const col = op.slice(3);
-        if (!validId(col)) continue;
-        const list = rest.split(",").map(v => `'${esc(v)}'`).join(",");
-        parts.push(`${sqlCol(col)} IN (${list})`);
-      } else if (op.startsWith("not.")) {
-        const subop = op.slice(4), eqPos = rest.indexOf("=");
+      } else if (op === "in") {
+        const eqPos = rest.indexOf("=");
         if (eqPos < 0) continue;
         const col = rest.slice(0, eqPos), val = rest.slice(eqPos + 1);
         if (!validId(col)) continue;
-        const s = subop === "eq" ? "=" : subop === "neq" ? "!=" : "=";
+        const list = val.split(",").map(v => `'${esc(v)}'`).join(",");
+        parts.push(`${sqlCol(col)} IN (${list})`);
+      } else if (op === "not") {
+        const dotPos = rest.indexOf(".");
+        if (dotPos < 0) continue;
+        const col = rest.slice(0, dotPos), afterCol = rest.slice(dotPos + 1);
+        const eqPos = afterCol.indexOf("=");
+        if (eqPos < 0) continue;
+        const subop = afterCol.slice(0, eqPos), val = afterCol.slice(eqPos + 1);
+        if (!validId(col)) continue;
+        const s = subop === "eq" ? "=" : subop === "neq" ? "!=" : subop === "gt" ? ">" : subop === "gte" ? ">=" : subop === "lt" ? "<" : subop === "lte" ? "<=" : "=";
         parts.push(`NOT (${sqlCol(col)} ${s} '${esc(val)}')`);
       }
     }
@@ -266,6 +284,8 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
       is: (col: string, val: any) => (q.filters.push(`is.${col}=${val}`), b),
       in: (col: string, vals: any[]) => (q.filters.push(`in.${col}=${vals.join(",")}`), b),
       not: (col: string, op: string, val: any) => (q.filters.push(`not.${col}.${op}=${val}`), b),
+      or: (clause: string) => (q.filters.push(`or=${clause}`), b),
+      filter: (col: string, op: string, val: any) => (q.filters.push(`${op}.${col}=${val}`), b),
       order: (col: string, { ascending = true } = {}) => (q.order = `${col}.${ascending ? "asc" : "desc"}`, b),
       limit: (n: number) => (q.limit = n, b),
       offset: (n: number) => (q.offset = n, b),

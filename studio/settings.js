@@ -36,8 +36,8 @@ export async function render(container) {
 const db = createClient('${origin}', 'your-anon-key');
 
 // Email auth
-const { user } = await db.auth.signUp({ email: 'user@example.com', password: 'password' });
-const { session } = await db.auth.signIn({ email: 'user@example.com', password: 'password' });
+const { data: { user } } = await db.auth.signUp({ email: 'user@example.com', password: 'password' });
+const { data: { session } } = await db.auth.signInWithPassword({ email: 'user@example.com', password: 'password' });
 
 // CRUD
 const { data } = await db.from('todos').select('*');
@@ -46,7 +46,9 @@ await db.from('todos').update({ title: 'Updated' }).eq('id', '...');
 await db.from('todos').delete().eq('id', '...');
 
 // Realtime
-db.channel('todos').on('INSERT', row => console.log('New:', row)).subscribe();</code></pre>
+db.channel('changes')
+  .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'todos' }, row => console.log('New:', row))
+  .subscribe();</code></pre>
       </div>
 
       <div>
