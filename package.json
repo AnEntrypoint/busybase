@@ -16,7 +16,7 @@
   "scripts": {
     "start": "bun run src/cli.ts serve",
     "test": "bun run src/cli.ts test",
-    "build": "bun build src/server.ts --target=bun --outfile=src/server.js --external vectordb && bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js && bun build src/cli.ts --target=bun --outfile=src/cli.js --external vectordb && bun build src/embedded.ts --target=bun --outfile=src/embedded.js --external vectordb && bun build src/hooks.ts --target=bun --outfile=src/hooks.js --external vectordb && bun build src/realtime.ts --target=bun --outfile=src/realtime.js --external vectordb"
+    "build": "bun build src/server.ts --target=bun --outfile=src/server.js --external @libsql/client && bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js && bun build src/cli.ts --target=bun --outfile=src/cli.js --external @libsql/client && bun build src/embedded.ts --target=bun --outfile=src/embedded.js --external @libsql/client && bun build src/hooks.ts --target=bun --outfile=src/hooks.js --external @libsql/client && bun build src/realtime.ts --target=bun --outfile=src/realtime.js --external @libsql/client"
   },
   "files": [
     "src/server.js",
@@ -31,9 +31,9 @@
     "access": "public"
   },
   "dependencies": {
-    "vectordb": "^0.21.2"
+    "@libsql/client": "^0.17.2"
   },
-  "keywords": ["database", "sqlite", "supabase", "rest", "api", "bun", "backend", "vector"],
+  "keywords": ["database", "sqlite", "supabase", "rest", "api", "bun", "backend"],
   "author": "AnEntrypoint",
   "license": "ISC",
   "repository": {
