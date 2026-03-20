@@ -12,4 +12,6 @@ test_lance2.ts
 busybase-test.exe
 busybase-test
 *_data/
+*_data_*/
+.prd
 src/*.js
