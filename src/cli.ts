@@ -12,7 +12,6 @@
  *   busybase query <table> [filter...]      Query rows (filter: col=val)
  *   busybase update <table> <json> [filter] Update rows
  *   busybase delete <table> <col>=<val>     Delete rows
- *   busybase vec <table> <json-vec> [limit] Vector search
  */
 
 import BB from "./sdk.ts";
@@ -93,15 +92,6 @@ else if (cmd === "delete") {
   let q = db.from(table).delete();
   q = parseFilter(q, filters);
   const r = await q;
-  print(r);
-}
-
-else if (cmd === "vec") {
-  const [table, vecStr, limitStr] = args;
-  if (!table || !vecStr) die("Usage: busybase vec <table> <json-vec> [limit]");
-  const vec = JSON.parse(vecStr);
-  const limit = limitStr ? parseInt(limitStr) : 10;
-  const r = await db.from(table).select("*").vec(vec, limit);
   print(r);
 }
 
@@ -261,18 +251,6 @@ else if (cmd === "test") {
   const afterDel = await db.from(tbl).select("*");
   check("2 rows remain after delete", afterDel.data?.length === 2, afterDel.data);
 
-  console.log("\n[vector search]");
-  const vtbl = `vec_${Date.now()}`;
-  await db.from(vtbl).insert([
-    { label: "cat", vector: [1, 0, 0, 0] },
-    { label: "dog", vector: [0, 1, 0, 0] },
-    { label: "fish", vector: [0, 0, 1, 0] },
-  ]);
-  const vs = await db.from(vtbl).select("*").vec([1, 0, 0, 0], 2);
-  check("vec top result = cat", vs.data?.[0]?.label === "cat", vs.data);
-  check("vec has _distance", typeof vs.data?.[0]?._distance === "number", vs.data?.[0]);
-  check("vec limit=2", vs.data?.length === 2, vs.data);
-
   // Prefer: return=minimal
   console.log("\n[Prefer: return=minimal]");
   const minRes = await globalThis.fetch(`${URL}/rest/v1/${tbl}`, {
@@ -383,7 +361,6 @@ Commands:
   query <table> [col=val ...]      Query with filters
   update <table> <json> [col=val]  Update rows
   delete <table> <col=val> ...     Delete rows
-  vec <table> <[...vec]> [limit]   Vector search
 
 Environment:
   BUSYBASE_URL   Server URL (default: http://localhost:54321)

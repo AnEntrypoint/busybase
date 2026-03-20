@@ -1,5 +1,5 @@
 import { fireHook, sendEmail, hooks } from "./hooks.ts";
-import { Z, SENTINEL, esc, openTbl, mkTbl, getRows, makeUser, makeSession, issueSession, ok, err, getUser } from "./db.ts";
+import { db, esc, getRows, dbInsert, dbUpdate, dbDelete, makeUser, makeSession, issueSession, ok, err, getUser } from "./db.ts";
 
 const nonces = new Map<string, number>();
 const resetTokens = new Map<string, { uid: string; exp: number }>();
@@ -8,21 +8,18 @@ const importPubKey = (b64: string) =>
   crypto.subtle.importKey("raw", Uint8Array.from(atob(b64), c => c.charCodeAt(0)), { name: "Ed25519" }, false, ["verify"]);
 
 export const initAuthTables = async () => {
-  if (!(await openTbl("_users")))
-    await mkTbl("_users", [{ id: SENTINEL, email: SENTINEL, pw: "", pubkey: "", role: "authenticated", meta: "{}", app_meta: "{}", created: "", updated: "", last_sign_in: "", vector: Z }]);
-  if (!(await openTbl("_sessions")))
-    await mkTbl("_sessions", [{ token: SENTINEL, refresh: SENTINEL, uid: "", exp: 0, vector: Z }]);
+  await db.execute(`CREATE TABLE IF NOT EXISTS _users (
+    id TEXT, email TEXT, pw TEXT, pubkey TEXT, role TEXT,
+    meta TEXT, app_meta TEXT, created TEXT, updated TEXT, last_sign_in TEXT
+  )`);
+  await db.execute(`CREATE TABLE IF NOT EXISTS _sessions (token TEXT, refresh TEXT, uid TEXT, exp INTEGER)`);
 };
 
 export const sweepExpired = async () => {
   const now = Date.now();
   for (const [k, exp] of nonces) if (exp < now) nonces.delete(k);
   for (const [k, v] of resetTokens) if (v.exp < now) resetTokens.delete(k);
-  const st = await openTbl("_sessions");
-  if (st) {
-    const expired = await st.filter(`exp < ${now} AND token != '${SENTINEL}'`).execute().catch(() => []) as any[];
-    for (const s of expired) { try { await st.delete(`token = '${esc(s.token)}'`); } catch {} }
-  }
+  await db.execute({ sql: "DELETE FROM _sessions WHERE exp < ?", args: [now] }).catch(() => {});
 };
 
 export const handleAuth = async (action: string, req: Request, B: any): Promise<Response | null> => {
@@ -48,16 +45,14 @@ export const handleAuth = async (action: string, req: Request, B: any): Promise<
     const now = new Date().toISOString();
     let users = await getRows("_users", `pubkey = '${esc(pubkey)}'`);
     let u = users[0];
-    const ut = (await openTbl("_users"))!;
     if (!u) {
-      u = { id: crypto.randomUUID(), email: "", pw: "", pubkey, role: "authenticated", meta: "{}", app_meta: "{}", created: now, updated: now, last_sign_in: now, vector: Z };
-      await ut.add([u]);
+      u = { id: crypto.randomUUID(), email: "", pw: "", pubkey, role: "authenticated", meta: "{}", app_meta: "{}", created: now, updated: now, last_sign_in: now };
+      await dbInsert("_users", u);
       const hookErr = await fireHook("onSignup", makeUser(u));
       if (hookErr) return err(hookErr, 400);
     } else {
-      await ut.delete(`id = '${esc(u.id)}'`);
+      await dbUpdate("_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
       u = { ...u, last_sign_in: now, updated: now };
-      await ut.add([u]);
     }
     const { token, refresh, exp: sExp } = await issueSession(u.id);
     const user = makeUser(u);
@@ -70,8 +65,8 @@ export const handleAuth = async (action: string, req: Request, B: any): Promise<
     const emailLower = B.email.toLowerCase();
     if ((await getRows("_users", `email = '${esc(emailLower)}'`)).length) return err("User already registered", 400, "Check if user already exists");
     const now = new Date().toISOString();
-    const u = { id: crypto.randomUUID(), email: emailLower, pw: await Bun.password.hash(B.password), pubkey: "", role: "authenticated", meta: JSON.stringify(B.data || {}), app_meta: "{}", created: now, updated: now, last_sign_in: now, vector: Z };
-    await (await openTbl("_users"))!.add([u]);
+    const u = { id: crypto.randomUUID(), email: emailLower, pw: await Bun.password.hash(B.password), pubkey: "", role: "authenticated", meta: JSON.stringify(B.data || {}), app_meta: "{}", created: now, updated: now, last_sign_in: now };
+    await dbInsert("_users", u);
     const signupHookErr = await fireHook("onSignup", makeUser(u));
     if (signupHookErr) return err(signupHookErr, 400);
     return ok({ user: makeUser(u), session: null });
@@ -83,9 +78,7 @@ export const handleAuth = async (action: string, req: Request, B: any): Promise<
     const u = users[0];
     if (!u || !await Bun.password.verify(B.password || "", u.pw)) return err("Invalid login credentials", 400);
     const now = new Date().toISOString();
-    const ut = (await openTbl("_users"))!;
-    await ut.delete(`id = '${esc(u.id)}'`);
-    await ut.add([{ ...u, last_sign_in: now, updated: now }]);
+    await dbUpdate("_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
     const { token, refresh, exp } = await issueSession(u.id);
     const user = makeUser({ ...u, last_sign_in: now, updated: now });
     await fireHook("onSignin", user);
@@ -112,16 +105,14 @@ export const handleAuth = async (action: string, req: Request, B: any): Promise<
       const emailHookErr = await fireHook("onEmailChange", makeUser(u), newEmail);
       if (emailHookErr) return err(emailHookErr, 400);
     }
-    const merged = { ...u, email: newEmail, pw: B.password ? await Bun.password.hash(B.password) : u.pw, meta: JSON.stringify({ ...JSON.parse(u.meta || "{}"), ...(B.data || {}) }), app_meta: JSON.stringify({ ...JSON.parse(u.app_meta || "{}"), ...(B.app_metadata || {}) }), updated: now };
-    const ut = (await openTbl("_users"))!;
-    await ut.delete(`id = '${esc(u.id)}'`);
-    await ut.add([merged]);
-    return ok({ user: makeUser(merged) });
+    const merged = { email: newEmail, pw: B.password ? await Bun.password.hash(B.password) : u.pw, meta: JSON.stringify({ ...JSON.parse(u.meta || "{}"), ...(B.data || {}) }), app_meta: JSON.stringify({ ...JSON.parse(u.app_meta || "{}"), ...(B.app_metadata || {}) }), updated: now };
+    await dbUpdate("_users", merged, `id = '${esc(u.id)}'`);
+    return ok({ user: makeUser({ ...u, ...merged }) });
   }
 
   if (action === "logout") {
     const token = req.headers.get("Authorization")?.split(" ")[1];
-    if (token) { const st = await openTbl("_sessions"); if (st) await st.delete(`token = '${esc(token)}'`); }
+    if (token) await dbDelete("_sessions", `token = '${esc(token)}'`).catch(() => {});
     return ok({});
   }
 
@@ -150,13 +141,11 @@ export const handleAuth = async (action: string, req: Request, B: any): Promise<
       if (!entry || entry.exp < Date.now()) return err("Invalid or expired token", 401);
       if (!password) return err("New password required");
       resetTokens.delete(token);
-      const ut = (await openTbl("_users"))!;
       const users = await getRows("_users", `id = '${esc(entry.uid)}'`);
       const u = users[0];
       if (!u) return err("User not found", 404);
       const now = new Date().toISOString();
-      await ut.delete(`id = '${esc(u.id)}'`);
-      await ut.add([{ ...u, pw: await Bun.password.hash(password), updated: now }]);
+      await dbUpdate("_users", { pw: await Bun.password.hash(password), updated: now }, `id = '${esc(u.id)}'`);
       const { token: access, refresh, exp } = await issueSession(u.id);
       return ok({ user: makeUser({ ...u, updated: now }), session: makeSession(access, refresh, exp, makeUser({ ...u, updated: now })) });
     }

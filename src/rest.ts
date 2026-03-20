@@ -1,6 +1,6 @@
 import { fireHook, pipeHook, hooks } from "./hooks.ts";
 import { broadcastChange } from "./realtime.ts";
-import { validId, real, openTbl, mkTbl, getRows, getAllRows, clean, toFilter, getUser, ok, err, cors } from "./db.ts";
+import { validId, openTbl, mkTbl, ensureCols, dbInsert, dbUpdate, dbDelete, getRows, getAllRows, clean, toFilter, getUser, ok, err, cors } from "./db.ts";
 
 export const handleRest = async (table: string, req: Request, P: Record<string, string>, B: any): Promise<Response> => {
   if (!validId(table)) return err("Invalid table name");
@@ -15,17 +15,6 @@ export const handleRest = async (table: string, req: Request, P: Record<string, 
   const returnMinimal = prefer.includes("return=minimal");
 
   if (req.method === "GET") {
-    if (P.vec) {
-      const t = await openTbl(table);
-      if (!t) return ok([]);
-      const limit = P.limit ? parseInt(P.limit) : 10;
-      const filter = toFilter(P);
-      try {
-        let q = t.search(JSON.parse(P.vec) as number[]).limit(limit);
-        q = q.filter(filter ? `(${real()}) AND (${filter})` : real());
-        return ok(clean(await q.execute() as any[]));
-      } catch { return err("Invalid vector", 400); }
-    }
     const paramsHooked = await pipeHook("beforeSelect", P, table);
     const filter = toFilter(paramsHooked);
     let rows = filter ? await getRows(table, filter) : await getAllRows(table);
@@ -54,13 +43,14 @@ export const handleRest = async (table: string, req: Request, P: Record<string, 
   if (req.method === "POST") {
     let rows = Array.isArray(B) ? B : [B];
     if (!rows.length || !Object.keys(rows[0]).length) return err("Empty body");
-    if (Object.keys(rows[0]).some(k => k !== "vector" && !validId(k))) return err("Invalid column name");
+    if (Object.keys(rows[0]).some(k => !validId(k))) return err("Invalid column name");
     const preErr = await fireHook("beforeInsert", table, rows);
     if (preErr) return err(preErr, 400);
-    rows = await pipeHook("afterInsert", rows.map((r: any) => ({ id: r.id ?? crypto.randomUUID(), ...r, vector: r.vector ?? [0] })), table);
-    let t = await openTbl(table);
-    if (!t) t = await mkTbl(table, rows);
-    else await t.add(rows);
+    rows = await pipeHook("afterInsert", rows.map((r: any) => ({ id: r.id ?? crypto.randomUUID(), ...r })), table);
+    const tExists = await openTbl(table);
+    if (!tExists) await mkTbl(table, rows[0]);
+    else await ensureCols(table, rows[0]);
+    for (const row of rows) await dbInsert(table, row);
     for (const row of clean(rows)) broadcastChange(table, "INSERT", row, null);
     if (returnMinimal) return new Response(null, { status: 204, headers: cors });
     return ok(clean(rows), 201);
@@ -69,17 +59,15 @@ export const handleRest = async (table: string, req: Request, P: Record<string, 
   if (req.method === "PUT" || req.method === "PATCH") {
     const filter = toFilter(P);
     if (!filter) return err("No filter provided");
-    const t = await openTbl(table);
-    if (!t) return err("Table not found", 404);
+    if (!(await openTbl(table))) return err("Table not found", 404);
     const data = Array.isArray(B) ? B[0] : B;
     let existing = await getRows(table, filter);
     if (!existing.length) return ok([]);
     const preErr = await fireHook("beforeUpdate", table, existing, data);
     if (preErr) return err(preErr, 400);
-    await t.delete(`(${real()}) AND (${filter})`);
-    let updated = existing.map((r: any) => ({ ...r, ...data, vector: r.vector ?? [0] }));
+    await dbUpdate(table, data, filter);
+    let updated = existing.map((r: any) => ({ ...r, ...data }));
     updated = await pipeHook("afterUpdate", updated, table);
-    await t.add(updated);
     for (let i = 0; i < updated.length; i++) broadcastChange(table, "UPDATE", clean([updated[i]])[0], clean([existing[i]])[0]);
     if (returnMinimal) return new Response(null, { status: 204, headers: cors });
     return ok(clean(updated));
@@ -88,12 +76,11 @@ export const handleRest = async (table: string, req: Request, P: Record<string, 
   if (req.method === "DELETE") {
     const filter = toFilter(P);
     if (!filter) return err("No filter provided");
-    const t = await openTbl(table);
-    if (!t) return err("Table not found", 404);
+    if (!(await openTbl(table))) return err("Table not found", 404);
     const toDelete = await getRows(table, filter);
     const preErr = await fireHook("beforeDelete", table, toDelete);
     if (preErr) return err(preErr, 400);
-    await t.delete(`(${real()}) AND (${filter})`);
+    await dbDelete(table, filter);
     await fireHook("afterDelete", table, toDelete);
     for (const row of clean(toDelete)) broadcastChange(table, "DELETE", null, row);
     if (returnMinimal) return new Response(null, { status: 204, headers: cors });
