@@ -2,13 +2,13 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-7c6af7.svg)](LICENSE)
 [![Built with Bun](https://img.shields.io/badge/Built%20with-Bun-f9f1e1.svg?logo=bun)](https://bun.sh)
-[![LanceDB](https://img.shields.io/badge/Storage-LanceDB-38bdf8.svg)](https://lancedb.com)
+[![libSQL](https://img.shields.io/badge/Storage-libSQL%2FSQLite-38bdf8.svg)](https://github.com/tursodatabase/libsql)
 [![Supabase Compatible](https://img.shields.io/badge/API-Supabase%20JS%20v2-3ecf8e.svg)](https://supabase.com/docs/reference/javascript)
 [![Releases](https://img.shields.io/github/v/release/AnEntrypoint/busybase?color=a78bfa)](https://github.com/AnEntrypoint/busybase/releases)
 
 **A minimal, drop-in Supabase alternative — self-hosted, no Docker, no Postgres, no config files.**
 
-Built on [Bun](https://bun.sh) + [LanceDB](https://lancedb.com). Single process. File-based storage. Native **vector search**. **Ed25519 keypair auth** (anonymous-first). Supabase JS v2 compatible API. Ships as a single binary.
+Built on [Bun](https://bun.sh) + [libSQL](https://github.com/tursodatabase/libsql) (SQLite). Single process. File-based storage. **Ed25519 keypair auth** (anonymous-first). Supabase JS v2 compatible API. Ships as a single binary.
 
 **[Documentation](https://anentrypoint.github.io/busybase/docs.html)** · **[Website](https://anentrypoint.github.io/busybase/)** · **[Releases](https://github.com/AnEntrypoint/busybase/releases)**
 
@@ -21,7 +21,6 @@ Built on [Bun](https://bun.sh) + [LanceDB](https://lancedb.com). Single process.
 | Supabase JS v2 compatible | ✅ | ✅ | ❌ |
 | Single binary deploy | ✅ | ❌ | ✅ |
 | No Docker required | ✅ | ❌ | ✅ |
-| Native vector search | ✅ | ⚠️ pgvector | ❌ |
 | Ed25519 keypair auth | ✅ | ❌ | ❌ |
 | Anonymous-first auth | ✅ | ⚠️ anon key | ❌ |
 | File-based storage | ✅ | ❌ | ✅ |
@@ -57,9 +56,6 @@ await db.from("todos").insert({ title: "Buy milk", done: false });
 // Query
 const { data } = await db.from("todos").select("*").eq("done", false);
 
-// Vector search
-await db.from("docs").insert({ text: "Bun is fast", vector: [0.9, 0.1, 0.0] });
-const { data: results } = await db.from("docs").select("*").vec([0.85, 0.1, 0.0], 5);
 ```
 
 ```sh
@@ -175,29 +171,6 @@ await db.from("todos").delete().eq("done", true);
 | `.count("exact")` | Add `count` + `Content-Range` header |
 | `.single()` | Return object (error if 0 rows) |
 | `.maybeSingle()` | Return object or null (no error) |
-| `.vec(embedding, limit)` | Vector similarity search |
-
----
-
-## Vector Search
-
-```ts
-// Insert with vectors
-await db.from("articles").insert([
-  { title: "Cats article", vector: [0.9, 0.1, 0.0, 0.0] },
-  { title: "Dogs article", vector: [0.1, 0.9, 0.0, 0.0] },
-]);
-
-// Search by similarity (returns _distance field)
-const { data } = await db.from("articles").select("*").vec([0.85, 0.15, 0.0, 0.0], 5);
-// data[0].title === "Cats article"
-// data[0]._distance === 0.02...
-
-// Combine with filters
-await db.from("articles").select("*").vec([...], 10).eq("category", "pets");
-```
-
-Works with any embedding model — OpenAI, Ollama, Cohere, local models, etc.
 
 ---
 
@@ -356,7 +329,6 @@ busybase insert todos '{"title":"Buy milk"}'
 busybase query  todos done=false
 busybase update todos '{"done":"true"}' title=Buy\ milk
 busybase delete todos done=true
-busybase vec embeddings '[1,0,0,0]' 5    # Vector search
 ```
 
 ---
@@ -366,7 +338,7 @@ busybase vec embeddings '[1,0,0,0]' 5    # Vector search
 | Variable | Default | Description |
 |---|---|---|
 | `BUSYBASE_PORT` | `54321` | HTTP port |
-| `BUSYBASE_DIR` | `busybase_data` | Data directory (LanceDB Arrow files) |
+| `BUSYBASE_DIR` | `busybase_data` | Data directory (SQLite file stored as `<dir>/db.sqlite`) |
 | `BUSYBASE_URL` | `http://localhost:54321` | Public URL (used in reset email links) |
 | `BUSYBASE_HOOKS` | — | Path to your hooks file |
 | `BUSYBASE_SMTP_HOST` | — | SMTP hostname |
@@ -394,10 +366,9 @@ Download from [Releases](https://github.com/AnEntrypoint/busybase/releases).
 ## Architecture
 
 - **Runtime:** [Bun](https://bun.sh) — native TypeScript, sub-ms startup, single binary compilation
-- **Storage:** [LanceDB](https://lancedb.com) — Apache Arrow columnar files, no server process, `cp -r` to backup
+- **Storage:** [libSQL](https://github.com/tursodatabase/libsql) — SQLite-compatible, file-based, `cp -r busybase_data` to backup
 - **Auth:** Ed25519 via WebCrypto (zero deps) + bcrypt via `Bun.password`
-- **Sessions:** UUID tokens, 7-day expiry, stored in `_sessions` LanceDB table
-- **Vector search:** LanceDB ANN — rows without vectors get a transparent sentinel `[0]`
+- **Sessions:** UUID tokens, 7-day expiry, stored in `_sessions` table
 - **CLI = SDK = Server** — the CLI uses the real SDK, making `busybase test` a true e2e test runner
 
 ---

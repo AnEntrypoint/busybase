@@ -97,7 +97,7 @@ const BB = (url: string, key: string) => {
 
   // --- Query builder ---
   const Q = (table: string, method?: string, body?: any) => {
-    const q = { filters: [] as string[], order: "", limit: 0, offset: 0, select: "*", vec: "", count: "" };
+    const q = { filters: [] as string[], order: "", limit: 0, offset: 0, select: "*", count: "" };
     let _single = false, _maybeSingle = false;
 
     const qs = () => {
@@ -105,7 +105,6 @@ const BB = (url: string, key: string) => {
       if (q.order) p.push(`order=${q.order}`);
       if (q.limit) p.push(`limit=${q.limit}`);
       if (q.offset) p.push(`offset=${q.offset}`);
-      if (q.vec) p.push(`vec=${encodeURIComponent(q.vec)}`);
       if (q.count) p.push(`count=${q.count}`);
       return p.join("&");
     };
@@ -148,7 +147,6 @@ const BB = (url: string, key: string) => {
       count:       (type: "exact" | "planned" | "estimated" = "exact") => (q.count = type, b),
       single:      () => (_single = true, b),
       maybeSingle: () => (_maybeSingle = true, b),
-      vec:         (embedding: number[], limit = 10) => (q.vec = JSON.stringify(embedding), q.limit = limit, b),
       then:        (res: any, rej: any) => resolve().then(res, rej),
     };
     return b;
