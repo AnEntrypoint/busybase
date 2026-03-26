@@ -61,6 +61,7 @@ export const handleRest = async (table: string, req: Request, P: Record<string, 
     if (!filter) return err("No filter provided");
     if (!(await openTbl(table))) return err("Table not found", 404);
     const data = Array.isArray(B) ? B[0] : B;
+    if (Object.keys(data).some(k => !validId(k))) return err("Invalid column name");
     let existing = await getRows(table, filter);
     if (!existing.length) return ok([]);
     const preErr = await fireHook("beforeUpdate", table, existing, data);

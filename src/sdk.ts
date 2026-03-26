@@ -47,35 +47,39 @@ const BB = (url: string, key: string) => {
 
     // Sign in with an existing private key (or a freshly generated one)
     signIn: async (privkeyB64?: string): Promise<any> => {
-      let privkey = privkeyB64 ?? store.getItem("_bb_privkey");
-      let pubkey = store.getItem("_bb_pubkey");
+      try {
+        let privkey = privkeyB64 ?? store.getItem("_bb_privkey");
+        let pubkey = store.getItem("_bb_pubkey");
 
-      if (!privkey) {
-        // First time — generate, persist
-        const kp = await genKeypair();
-        privkey = kp.privkey;
-        pubkey = kp.pubkey;
-        store.setItem("_bb_privkey", privkey);
-        store.setItem("_bb_pubkey", pubkey);
-      } else if (!pubkey) {
-        // Have privkey from restore, need to derive pubkey
-        // Re-import and re-export to get raw public key
-        const privCrypto = await crypto.subtle.importKey("pkcs8", unb64(privkey), { name: "Ed25519" }, true, ["sign"]);
-        // Can't directly export public from private in WebCrypto — generate pair is the only way
-        // So we store pubkey alongside privkey; if missing, user must re-generate
-        return { data: null, error: { message: "Pubkey missing — call keypair.restore(privkey, pubkey)" } };
+        if (!privkey) {
+          // First time — generate, persist
+          const kp = await genKeypair();
+          privkey = kp.privkey;
+          pubkey = kp.pubkey;
+          store.setItem("_bb_privkey", privkey);
+          store.setItem("_bb_pubkey", pubkey);
+        } else if (!pubkey) {
+          // Have privkey from restore, need to derive pubkey
+          // Re-import and re-export to get raw public key
+          const privCrypto = await crypto.subtle.importKey("pkcs8", unb64(privkey), { name: "Ed25519" }, true, ["sign"]);
+          // Can't directly export public from private in WebCrypto — generate pair is the only way
+          // So we store pubkey alongside privkey; if missing, user must re-generate
+          return { data: null, error: { message: "Pubkey missing — call keypair.restore(privkey, pubkey)" } };
+        }
+
+        // Get nonce
+        const nonceRes = await req("auth/v1/keypair");
+        if (nonceRes.error) return nonceRes;
+        const nonce = nonceRes.data.nonce;
+
+        // Sign nonce
+        const signature = await sign(privkey, nonce);
+        const r = await req("auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature }) });
+        if (r.data?.session) { setSession_(r.data.session); store.setItem("_bb_privkey", privkey); store.setItem("_bb_pubkey", pubkey!); emit("SIGNED_IN", session); }
+        return r;
+      } catch (e: any) {
+        return { data: null, error: { message: e?.message || "Keypair sign-in failed" } };
       }
-
-      // Get nonce
-      const nonceRes = await req("auth/v1/keypair");
-      if (nonceRes.error) return nonceRes;
-      const nonce = nonceRes.data.nonce;
-
-      // Sign nonce
-      const signature = await sign(privkey, nonce);
-      const r = await req("auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature }) });
-      if (r.data?.session) { setSession_(r.data.session); store.setItem("_bb_privkey", privkey); store.setItem("_bb_pubkey", pubkey!); emit("SIGNED_IN", session); }
-      return r;
     },
 
     // Restore from a saved backup key (privkey + pubkey pair)

@@ -56,6 +56,7 @@ export const handleAuth = async (action: string, req: Request, B: any): Promise<
     }
     const { token, refresh, exp: sExp } = await issueSession(u.id);
     const user = makeUser(u);
+    await fireHook("onIssueSession", user);
     await fireHook("onSignin", user);
     return ok({ user, session: makeSession(token, refresh, sExp, user) });
   }
@@ -81,6 +82,7 @@ export const handleAuth = async (action: string, req: Request, B: any): Promise<
     await dbUpdate("_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
     const { token, refresh, exp } = await issueSession(u.id);
     const user = makeUser({ ...u, last_sign_in: now, updated: now });
+    await fireHook("onIssueSession", user);
     await fireHook("onSignin", user);
     return ok({ user, session: makeSession(token, refresh, exp, user) });
   }
@@ -107,12 +109,15 @@ export const handleAuth = async (action: string, req: Request, B: any): Promise<
     }
     const merged = { email: newEmail, pw: B.password ? await Bun.password.hash(B.password) : u.pw, meta: JSON.stringify({ ...JSON.parse(u.meta || "{}"), ...(B.data || {}) }), app_meta: JSON.stringify({ ...JSON.parse(u.app_meta || "{}"), ...(B.app_metadata || {}) }), updated: now };
     await dbUpdate("_users", merged, `id = '${esc(u.id)}'`);
+    await fireHook("onUserUpdate", makeUser({ ...u, ...merged }), { email: B.email, password: !!B.password, data: B.data, app_metadata: B.app_metadata });
     return ok({ user: makeUser({ ...u, ...merged }) });
   }
 
   if (action === "logout") {
+    const user = await getUser(req);
     const token = req.headers.get("Authorization")?.split(" ")[1];
     if (token) await dbDelete("_sessions", `token = '${esc(token)}'`).catch(() => {});
+    if (user) await fireHook("onSignout", user);
     return ok({});
   }
 
