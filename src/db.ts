@@ -17,7 +17,7 @@ export const ok = (data: any, status = 200, extra: Record<string, string> = {}) 
 export const err = (msg: string, code = 400, hint = "") =>
   json({ data: null, error: { message: msg, hint, code } }, code);
 
-export const esc = (s: string) => String(s).replace(/'/g, "''");
+export const esc = (s: string) => String(s).replace(/\0/g, "").replace(/'/g, "''");
 export const validId = (s: string) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) && s !== "_users" && s !== "_sessions";
 
 mkdirSync(DIR, { recursive: true });
