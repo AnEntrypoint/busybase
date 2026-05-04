@@ -38,6 +38,9 @@ Return `{ error: string }` from any hook to abort the operation. Return a transf
 ## Embedded Mode
 `import { createEmbedded } from 'busybase/embedded'` — returns a client with the same interface as the HTTP SDK but running in-process using libSQL in local file mode. Used by zellous for zero-config local deployment.
 
+### Pluggable backends (2026-05-04+)
+`embedded.ts` exposes `registerBackend(name, factory)` and accepts `EmbeddedConfig.backend` + `EmbeddedConfig.url`. The factory receives `{ url }` and returns any object implementing `@libsql/client`'s `Client` interface — same `execute({sql, args})` shape every busybase query already uses. Default backend is `'libsql'`. Unknown backend names throw `busybase: unknown backend '<name>'`. `mkdirSync` only runs for the libsql backend so non-disk backends (sql.js, remote shims) work cleanly. Used by [thebird](https://github.com/AnEntrypoint/thebird) (`docs/libsql-sqljs.js`) to host busybase as a Supabase-compatible DB inside the browser via vendored sql.js.
+
 ## Studio
 
 BusyBase Studio is a zero-dependency browser UI served directly from the running server at `/studio`.

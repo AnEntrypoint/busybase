@@ -1300,9 +1300,26 @@ const { data: session } = await db.auth.signInWithPassword({
 
       <h3>Configuration</h3>
 <pre><code class="language-typescript">interface EmbeddedConfig {
-  dir?: string;    // Data directory (default: "busybase_data")
+  dir?: string;    // Data directory (default: "busybase_data") — libsql backend only
   hooks?: Hooks;   // Hook functions (same interface as BUSYBASE_HOOKS file)
+  backend?: string; // Registered backend name (default: "libsql")
+  url?: string;    // Override connection URL passed to backend factory
 }</code></pre>
+
+      <h3>Pluggable backends</h3>
+      <p>The default backend is libSQL. Register other backends via <code>registerBackend(name, factory)</code> — the factory returns any object implementing <code>@libsql/client</code>'s <code>Client</code> interface. This lets busybase run on sql.js, remote sqlite-over-HTTP, or any custom storage exposing <code>execute({sql, args})</code>.</p>
+<pre><code class="language-typescript">import { registerBackend, createEmbedded } from "busybase/embedded";
+
+// Example: sql.js in browser (zero server, zero native deps)
+registerBackend("sqljs", async ({ url }) => {
+  const { createClient } = await import("./libsql-sqljs.js");
+  return createClient({ url });
+});
+
+const db = await createEmbedded({ backend: "sqljs", url: "file:appdb" });
+await db.from("notes").insert({ body: "hello from a browser tab" });</code></pre>
+      <p>The <a href="https://github.com/AnEntrypoint/thebird">thebird</a> browser-native web-OS uses this to host busybase entirely in-browser — each instance gets its own IndexedDB-backed sqlite blob via vendored sql.js. No server, full Supabase JS v2 surface.</p>
+      <p>Unknown backend names throw <code>busybase: unknown backend '&lt;name&gt;'</code>. <code>mkdirSync</code> only runs for the libsql backend so non-disk backends work cleanly.</p>
 
       <h3>Realtime in embedded mode</h3>
       <p>Realtime events fire via Node.js <code>EventEmitter</code> instead of WebSocket:</p>

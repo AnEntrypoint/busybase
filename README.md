@@ -363,10 +363,54 @@ Download from [Releases](https://github.com/AnEntrypoint/busybase/releases).
 
 ---
 
+## Embedded mode + Pluggable backends
+
+`busybase/embedded` runs the full server logic in-process — no HTTP, no socket. Same Supabase JS v2 surface as the network SDK, just bound directly to the storage backend.
+
+```ts
+import { createEmbedded } from "busybase/embedded";
+
+const bb = await createEmbedded({ dir: "busybase_data" });
+const { data } = await bb.from("todos").insert({ title: "Buy milk" });
+```
+
+### Backend registry
+
+The default backend is libSQL. Other backends register a factory that returns any object implementing `@libsql/client`'s `Client` interface — the same `execute({sql, args})` shape every busybase query already uses.
+
+```ts
+import { registerBackend, createEmbedded } from "busybase/embedded";
+
+// Register a custom backend (any sql.js / WASM / remote shim works)
+registerBackend("sqljs", async ({ url }) => {
+  const { createClient } = await import("./libsql-sqljs.js");
+  return createClient({ url });
+});
+
+// Use it
+const bb = await createEmbedded({ backend: "sqljs", url: "file:appdb" });
+await bb.from("notes").insert({ body: "running entirely in the browser" });
+```
+
+Why this matters: the [thebird](https://github.com/AnEntrypoint/thebird) browser-native web-OS ships a `@libsql/client`-shape adapter over sql.js (`docs/libsql-sqljs.js`). Registering it as a busybase backend gives thebird a full Supabase-compatible DB **inside the browser** — anonymous-first auth, REST-style filters, realtime subscriptions, hooks — without any server.
+
+### `EmbeddedConfig`
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `dir` | `string` | `"busybase_data"` | Storage directory (libsql backend only — `mkdirSync` runs only when `backend === "libsql"`) |
+| `hooks` | `Hooks` | `{}` | Optional hooks file shape — see [Hooks](#hooks) |
+| `backend` | `string` | `"libsql"` | Registered backend name |
+| `url` | `string` | `file:${dir}/db.sqlite` | Override the connection URL passed to the backend factory |
+
+`registerBackend(name, factory)` is process-global and idempotent on the same name. Calling `createEmbedded({ backend })` with an unknown name throws `busybase: unknown backend '<name>'`.
+
+---
+
 ## Architecture
 
 - **Runtime:** [Bun](https://bun.sh) — native TypeScript, sub-ms startup, single binary compilation
-- **Storage:** [libSQL](https://github.com/tursodatabase/libsql) — SQLite-compatible, file-based, `cp -r busybase_data` to backup
+- **Storage:** [libSQL](https://github.com/tursodatabase/libsql) — SQLite-compatible, file-based, `cp -r busybase_data` to backup. Default backend; swap via `registerBackend()` for sql.js / wasm / remote engines.
 - **Auth:** Ed25519 via WebCrypto (zero deps) + bcrypt via `Bun.password`
 - **Sessions:** UUID tokens, 7-day expiry, stored in `_sessions` table
 - **CLI = SDK = Server** — the CLI uses the real SDK, making `busybase test` a true e2e test runner
