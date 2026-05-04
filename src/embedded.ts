@@ -1,7 +1,16 @@
-import { createClient, type Client } from "@libsql/client";
+import { createClient as libsqlCreateClient, type Client } from "@libsql/client";
 import { mkdirSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import type { Hooks } from "./hooks.ts";
+
+type BackendFactory = (cfg: { url: string }) => Client | Promise<Client>;
+const backends: Record<string, BackendFactory> = { libsql: (cfg) => libsqlCreateClient(cfg) };
+export const registerBackend = (name: string, factory: BackendFactory) => { backends[name] = factory; };
+const resolveClient = async (backend: string, url: string): Promise<Client> => {
+  const f = backends[backend];
+  if (!f) throw new Error(`busybase: unknown backend '${backend}'. Registered: ${Object.keys(backends).join(', ')}`);
+  return await f({ url });
+};
 
 const esc = (s: string) => String(s).replace(/'/g, "''");
 const validId = (s: string) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) && s !== "_users" && s !== "_sessions";
@@ -11,13 +20,15 @@ const makeSession = (token: string, refresh: string, exp: number, user: any) => 
 const ok = (data: any, count?: number) => count !== undefined ? { data, error: null, count } : { data, error: null };
 const err = (message: string, code = 400) => ({ data: null, error: { message, code } });
 
-export interface EmbeddedConfig { dir?: string; hooks?: Hooks; }
+export interface EmbeddedConfig { dir?: string; hooks?: Hooks; backend?: string; url?: string; }
 
 export const createEmbedded = async (config: EmbeddedConfig = {}) => {
   const dir = config.dir || "busybase_data";
   const hooks = config.hooks || {};
-  mkdirSync(dir, { recursive: true });
-  const db: Client = createClient({ url: `file:${dir}/db.sqlite` });
+  const backend = config.backend || "libsql";
+  if (backend === "libsql") mkdirSync(dir, { recursive: true });
+  const url = config.url || `file:${dir}/db.sqlite`;
+  const db: Client = await resolveClient(backend, url);
   const bus = new EventEmitter();
   bus.setMaxListeners(0);
   const nonces = new Map<string, number>();
