@@ -10,6 +10,9 @@
 .gm/long-gap-retry-state
 .gm/next-step.md
 .gm/turn-state.json
+.gm/claim-audit-fired
+.gm/residual-check-fired
+.gm/exec-spool/.ci-validated
 .gm/browser-chrome-profile-default/
 .gm/config-source-cache-default
 .gm/config-source-cache-default.*.sync.json
