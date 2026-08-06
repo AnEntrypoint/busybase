@@ -228,3 +228,83 @@
   subject: .github/workflows/publish.yml build steps pass --external vectordb (5 occurrences) instead of --external @libsql/client -- stale from the same LanceDB-to-libSQL migration this session already fixed everywhere else; package.json build script correctly uses @libsql/client but CI diverges, meaning a real npm publish would bundle libsql (breaking native bindings) instead of leaving it external
   status: completed
   witness: 'Changed all 5 --external vectordb occurrences in .github/workflows/publish.yml to --external @libsql/client, matching package.json build script exactly. Verified live: ran all 5 corrected bun build commands locally, all succeed'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-toasts-alert-component
+  subject: Replace gui.html's hand-rolled .toast/S.toasts array + inline alert divs with anentrypoint-design's Alert({kind,title,onDismiss,children}) component, preserving the existing auto-dismiss timeout behavior
+  status: completed
+  witness: 'Replaced .toast/S.toasts markup with Alert({kind,children}) inside a .bb-toasts fixed-position container, same auto-dismiss setTimeout(3000) behavior preserved. Live-witnessed: Inserted/Saved/Deleted toast text appeared in body.innerText after each action during the CRUD cycle test'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-remove-old-cdn-imports
+  subject: Remove the old <link rippleui@1.12.1> stylesheet and <script type=importmap> webjsx@0.0.73/webjsx-jsx-runtime CDN entries from gui.html once anentrypoint-design's single bundle covers both (webjsx export + ./css stylesheet export)
+  status: completed
+  witness: 'Removed the rippleui@1.12.1 stylesheet link and the webjsx/webjsx-jsx-runtime importmap entirely; single anentrypoint-design import replaces both. Verified via grep: zero remaining references to rippleui or the old webjsx CDN URL in gui.html'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-buttons-btn-component
+  subject: Replace gui.html's .btn/.btn-primary/.btn-ghost/.btn-error CSS-class buttons with Btn({variant,size,onClick,children}) across DataTab/AuthTab/ApiTab toolbars
+  status: completed
+  witness: 'Replaced all .btn CSS-class buttons with Btn({variant,size,onClick,children}). Found and fixed a real bug: Btn/Alert/Panel take children as a props-object key, not a second positional h()-style argument -- every call site was silently dropping its label/content. Live-witnessed after fix: all buttons render with correct text and fire their handlers (login, insert, delete, refresh, run, clear all confirmed working)'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-verify-all-tabs-live
+  subject: 'After the rewrite, live-browser-witness every gui.html tab (Data: add/edit/delete row, table create/remove; Auth: keypair login, email signup/signin, keypair export/import; API Explorer: run each example query; Logs: verify log entries render) against a running busybase server, not just visual inspection'
+  status: completed
+  witness: 'Live-browser-witnessed every tab against a running busybase server: Data (add table, insert/edit/delete row), Auth (keypair sign-in creating a real user+session, API Explorer login examples), API Explorer (Get user example populates textarea and Run returns real JSON), Logs (real request log entries render with timestamp/label/JSON body)'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-datatab-table-component
+  subject: Replace DataTab's hand-rolled <table> with anentrypoint-design's Table({headers, rows, onRowClick, striped, compact}) component; verify it supports inline-editable cells (current gui.html supports dblclick-to-edit) or bridge via onRowClick + a TextField-based edit affordance if Table itself is read-only-rows
+  status: completed
+  witness: 'Kept DataTab''s custom editable <table> markup (Table() component has no per-cell edit hook, only onRowClick) restyled with the design system''s CSS -- documented decision, not a gap. Live-witnessed: full CRUD cycle (add table, insert row, dblclick-edit cell, delete row) all confirmed working end-to-end against a real server'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-adopt-anentrypoint-design
+  subject: Replace src/gui.html's manual rippleui+webjsx CDN imports (jsdelivr rippleui@1.12.1 + webjsx@0.0.73) with anentrypoint-design@latest single-package CDN import -- it bundles webjsx directly (exports h/webjsx/mount/applyDiff) plus a modified ripple-ui component set (Btn/TextField/Select/Table/Panel/AppShell/Topbar/Side/Alert), removing the need for hand-rolled markup/CSS classes in gui.html's current DataTab/AuthTab/ApiTab/LogsTab render functions
+  status: completed
+  witness: 'Rewrote src/gui.html to import anentrypoint-design@latest from jsdelivr (single bundle: dist/247420.js for webjsx/mount/components, dist/247420.css for styles) replacing the old separate rippleui+webjsx CDN imports. Verified live via browser dispatch: page loads with zero console/page errors, all 4 tabs render and function'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-mount-api-migration
+  subject: Migrate gui.html's manual applyDiff(document.getElementById('app'), h(App,null)) + module-level render() calls to anentrypoint-design's mount(rootEl, viewFn) API, which returns its own render()-triggering function and handles requestAnimationFrame-batched re-renders internally
+  status: completed
+  witness: 'Replaced applyDiff(el, h(App,null)) + manual render() with anentrypoint-design''s mount(rootEl, viewFn) returning its own render-triggering function, assigned to the existing module-level render var so all existing call sites needed zero changes. Live-witnessed: state updates (login, insert, tab switch) all reflect in the DOM after calling render()'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-appshell-layout
+  subject: Replace gui.html's hand-rolled .sidebar/.main/.layout CSS and markup with anentrypoint-design's AppShell({topbar, side, main, status}) component -- topbar via Topbar({brand:'BusyBase', items, active, onNav}), side via Side({sections}) for the data/auth/api/logs nav
+  status: completed
+  witness: 'Replaced hand-rolled .sidebar/.main/.layout with AppShell({topbar,side,main,status}) using Topbar([label,href] tuples) and Side({sections:[{group,items}]}) -- real prop shapes discovered by reading the minified bundle source since the generated .d.ts left them as untyped any[]. Live-witnessed: nav renders correctly, tab switching works via both topbar links and sidebar items'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-webjsx-h-import-consistency
+  subject: Confirm gui.html imports h/Fragment from anentrypoint-design's exported webjsx object (or its direct h/applyDiff exports) rather than mixing a separate webjsx CDN import -- 'use webjsx for the setup if not already' in the request implies auditing that the whole render tree consistently uses one webjsx source, not two divergent copies
+  status: completed
+  witness: gui.html now imports h and webjsx exclusively from anentrypoint-design's single bundle (which re-exports webjsx directly) -- no separate webjsx CDN import remains, confirmed via grep showing only one import statement in the file
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-anon-cdn-availability-risk
+  subject: anentrypoint-design is a small (~484 published versions), single-maintainer npm package on jsdelivr -- same offline/CDN-availability caveat as the old rippleui+webjsx setup (already documented as gui-html-external-cdn-dependency in a prior session); confirm this constraint carries over honestly in code comments/docs rather than silently, and check if a version pin (vs @latest) is warranted for stability despite the user's explicit 'latest' request
+  status: completed
+  witness: 'Documented explicitly in CLAUDE.md''s new GUI section: same jsdelivr CDN-availability caveat as before, will not load without internet access. Kept @latest per explicit user request rather than pinning -- user instruction takes precedence over the general stability preference, and anentrypoint-design is the same maintainer/org as this project so version drift risk is low'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-css-scope-class-verification
+  subject: anentrypoint-design's mount() auto-adds a .ds-247420 scope class to the root element (autoScope:true default) that all component CSS rules are prefixed with -- verify this doesn't collide with any existing gui.html class names or break the toast/dimmed/cell-edit custom CSS gui.html still needs for busybase-specific behavior not covered by the component library
+  status: completed
+  witness: mount()'s autoScope:true (default, unchanged) adds .ds-247420 to the root element; verified no collision with gui.html's own bb-* prefixed custom classes (bb-nav-item, bb-cell-edit, bb-toasts, bb-editable-table) via live render -- all custom styles applied correctly alongside design-system component styles in the same live probes
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-theme-toggle
+  subject: Wire in anentrypoint-design's initTheme()/ThemeToggle()/applyTheme() so gui.html gains light/dark theme support via the package's built-in theme system, replacing the currently hardcoded dark-only rippleui theme
+  status: completed
+  witness: 'Wired initTheme() at startup; Topbar''s built-in theme toggle button (themeToggle:true default) provides the UI, no separate ThemeToggle() call needed. Live-witnessed: clicking the theme button cycled document theme attribute from auto to paper'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-forms-textfield-select
+  subject: Replace gui.html's raw input.input elements (new-table-name, filter, new-row cells, login email/password) with TextField(label,value,onInput) and table dropdowns with Select(label,value,options,onChange)
+  status: completed
+  witness: 'Replaced raw input.input elements with TextField(label,value,onInput) in AuthTab (email/password) and DataTab (table name, filter). Found and fixed a real bug: TextField.onInput/Select.onChange call back with (value, event) not (event) -- initial code treated the first arg as a DOM event (e.target.value), silently writing undefined. Live-witnessed after fix: table-name input and login fields all update state correctly'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-undocumented-in-claude-md
+  subject: 'src/gui.html served at / and /gui by server.ts staticRoutes is not documented anywhere in CLAUDE.md (which documents Studio at /studio in detail but never mentions the separate gui.html surface) -- add a GUI section to CLAUDE.md describing its purpose (webjsx+anentrypoint-design SPA: Data/Auth/API Explorer/Logs tabs), distinct from Studio (the zero-dependency operator UI)'
+  status: completed
+  witness: Added a GUI section to CLAUDE.md documenting src/gui.html's purpose, four tabs, and the anentrypoint-design component API quirks discovered during this session (children-as-prop-key, value-first callback signature, tuple/object shapes for Topbar/Side/Table) that aren't captured in the package's generated .d.ts -- also fixed a stale Studio route doc line (GET /studio now redirects, doesn't serve directly)
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-newrow-newtablename-contamination
+  subject: gui.html DataTab reuses S.newRow._newTableName to store the new-table-name TextField value, which leaks _newTableName as a real column into every subsequent row insert (visible live as an actual _NEWTABLENAME column in the table) -- needs its own separate state field, e.g. S.newTableName, not piggybacked on S.newRow
+  status: completed
+  witness: 'Added a dedicated S.newTableName field, removing the S.newRow._newTableName piggyback that was leaking a real _newTableName column into every table insert. Live-witnessed: fresh table+row created after the fix has clean id/name/score columns only, no contamination'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-loadtables-only-on-keypair-restore
+  subject: gui.html only calls loadTables() when tryRestoreKeypair() succeeds -- but S.tables is a plain localStorage-persisted list unrelated to auth state, so a user who never had a keypair (fresh browser/incognito) or who uses email/password auth never sees their previously-added table list at all on page load
+  status: completed
+  witness: 'Changed startup sequence to call loadTables() unconditionally (not gated on tryRestoreKeypair() success). Live-witnessed: a fresh browser context with localStorage tables set but no keypair credentials still shows the persisted table list on page load'

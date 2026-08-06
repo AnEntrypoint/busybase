@@ -57,10 +57,23 @@ BusyBase Studio is a zero-dependency browser UI served directly from the running
 - `settings.js` — Config viewer: fetches `/studio/config`, shows env var table and SDK usage snippet.
 
 ### Studio Server Routes (server.ts)
-- `GET /studio` or `/studio/` — serves `studio/index.html`
+- `GET /studio` — 301 redirects to `/studio/` (its panel modules resolve relative imports against the request URL, so the trailing slash is required)
+- `GET /studio/` — serves `studio/index.html`
 - `GET /studio/*.js` — serves studio JS panel files
 - `GET /studio/config` — returns `{ BUSYBASE_DIR, BUSYBASE_PORT, BUSYBASE_CORS_ORIGIN }` (no secrets)
 - `GET /studio/api/tables` — returns `{ data: string[] }` of all table names via `tableNames()` from db.ts
+
+## GUI
+
+`src/gui.html`, served at `/` and `/gui` (server.ts `staticRoutes`), is a separate single-page admin app from Studio — a webjsx SPA styled with `anentrypoint-design` (loaded from jsdelivr CDN as a single ESM bundle: `dist/247420.js` for components/webjsx/mount, `dist/247420.css` for styles). Same CDN-availability caveat as Studio's own external dependencies: it will not load without internet access to jsdelivr.
+
+Four tabs, driven by one module-level `S` state object and a `render()` function returned by `anentrypoint-design`'s `mount(rootEl, viewFn)`:
+- **Data** — table list (persisted in `localStorage`), row browser with inline dblclick-to-edit cells, add/delete row, add/remove table
+- **Auth** — keypair (anonymous Ed25519) sign-in/restore/export, email/password sign-up/sign-in
+- **API Explorer** — canned REST/auth request examples, editable request textarea, Run button showing raw JSON response
+- **Logs** — rolling log of every `api()` call made by the GUI itself (method, path, response), newest first
+
+`anentrypoint-design` component API notes (undocumented in its generated `.d.ts`, confirmed by reading its bundle): `Btn`/`Alert`/`Panel` take `children` as a prop key on the single props object, NOT a second positional argument like `h()`. `TextField.onInput`/`Select.onChange` call back with `(value, event)` — the value string first, not a DOM event. `Topbar.items` is `[label, href]` tuples. `Side.sections` is `[{group, items:[{label,href,active,onClick}]}]`. `Table.rows` is array-of-arrays positional to `headers`, not array-of-objects.
 
 ### GitHub Pages (docs/)
 - `docs/index.html` — Marketing site: hero, features grid, comparison table vs Supabase, quick start code tabs, footer. Pure HTML/CSS/JS, no build step. Deployed via GitHub Pages.
