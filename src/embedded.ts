@@ -133,6 +133,58 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
     delete: () => Q(table, "DELETE", null),
   });
 
+  const b64 = (buf: ArrayBuffer) => Buffer.from(buf).toString("base64");
+  const unb64 = (s: string) => Uint8Array.from(Buffer.from(s, "base64"));
+
+  const genKeypair = async () => {
+    const kp = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const [pub, priv] = await Promise.all([
+      crypto.subtle.exportKey("raw", kp.publicKey),
+      crypto.subtle.exportKey("pkcs8", kp.privateKey),
+    ]);
+    return { pubkey: b64(pub), privkey: b64(priv) };
+  };
+
+  const signNonce = async (privkeyB64: string, nonce: string) => {
+    const key = await crypto.subtle.importKey("pkcs8", unb64(privkeyB64), { name: "Ed25519" }, false, ["sign"]);
+    return b64(await crypto.subtle.sign("Ed25519", key, new TextEncoder().encode(nonce)));
+  };
+
+  let heldPrivkey: string | null = null, heldPubkey: string | null = null;
+
+  const keypair = {
+    generate: genKeypair,
+    signIn: async (privkeyB64?: string, pubkeyB64?: string): Promise<any> => {
+      let privkey = privkeyB64 ?? heldPrivkey;
+      let pubkey = pubkeyB64 ?? heldPubkey;
+      if (!privkey) {
+        const kp = await genKeypair();
+        privkey = kp.privkey; pubkey = kp.pubkey;
+      } else if (!pubkey) {
+        return { data: null, error: { message: "Pubkey missing -- call keypair.signIn(privkey, pubkey) or keypair.restore(privkey, pubkey)" } };
+      }
+      heldPrivkey = privkey; heldPubkey = pubkey;
+
+      const nonceReq = authedRequest("GET");
+      const nonceRes = await handleAuth(db, "keypair", nonceReq, {});
+      const { data: nonceData, error: nonceError } = await unwrap(nonceRes!);
+      if (nonceError) return { data: null, error: nonceError };
+      const signature = await signNonce(privkey, nonceData.nonce);
+
+      const req = authedRequest("POST", { pubkey, nonce: nonceData.nonce, signature });
+      const res = await handleAuth(db, "keypair", req, { pubkey, nonce: nonceData.nonce, signature });
+      const json = await unwrap(res!);
+      if (json.data?.session) { currentToken = json.data.session.access_token; currentSession = json.data.session; emitAuth("SIGNED_IN", currentSession); }
+      return json;
+    },
+    restore: async (privkey: string, pubkey: string): Promise<any> => {
+      heldPrivkey = privkey; heldPubkey = pubkey;
+      return keypair.signIn(privkey, pubkey);
+    },
+    export: () => ({ privkey: heldPrivkey, pubkey: heldPubkey }),
+    forget: () => { heldPrivkey = null; heldPubkey = null; },
+  };
+
   const auth = {
     signUp: async ({ email, password, options }: any) => {
       const req = authedRequest("POST", { email, password, data: options?.data });
@@ -146,12 +198,7 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
       if (json.data?.session) { currentToken = json.data.session.access_token; currentSession = json.data.session; emitAuth("SIGNED_IN", currentSession); }
       return json;
     },
-    signIn: async () => {
-      const req = authedRequest("GET");
-      const nonceRes = await handleAuth(db, "keypair", req, {});
-      const { data } = await unwrap(nonceRes!);
-      return { data: null, error: { message: "Embedded keypair signIn requires a client-held privkey; use auth.keypair.signIn(privkey) or auth.signInWithPassword instead." } };
-    },
+    signIn: async () => keypair.signIn(),
     signOut: async () => {
       const req = authedRequest("POST");
       const res = await handleAuth(db, "logout", req, {});
@@ -182,14 +229,7 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
       cb("INITIAL_SESSION", currentSession);
       return { data: { subscription: { unsubscribe: () => { const i = authListeners.indexOf(cb); if (i > -1) authListeners.splice(i, 1); } } } };
     },
-    keypair: {
-      signIn: async (privkeyB64: string) => {
-        if (!privkeyB64) return { data: null, error: { message: "Embedded keypair.signIn requires an explicit privkey (no localStorage in embedded mode)" } };
-        return { data: null, error: { message: "Embedded keypair auth is not yet implemented; use email/password auth in embedded mode" } };
-      },
-      restore: async () => ({ data: null, error: { message: "Embedded keypair auth is not yet implemented; use email/password auth in embedded mode" } }),
-      export: () => ({ privkey: null, pubkey: null }),
-    },
+    keypair,
   };
 
   const channels = new Map<string, any>();

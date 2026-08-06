@@ -13,6 +13,7 @@
 .gm/claim-audit-fired
 .gm/residual-check-fired
 .gm/exec-spool/.ci-validated
+.gm/.gm-continue-count
 .gm/browser-chrome-profile-default/
 .gm/config-source-cache-default
 .gm/config-source-cache-default.*.sync.json
