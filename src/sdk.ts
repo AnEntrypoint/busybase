@@ -58,11 +58,6 @@ const BB = (url: string, key: string) => {
         store.setItem("_bb_privkey", privkey);
         store.setItem("_bb_pubkey", pubkey);
       } else if (!pubkey) {
-        // Have privkey from restore, need to derive pubkey
-        // Re-import and re-export to get raw public key
-        const privCrypto = await crypto.subtle.importKey("pkcs8", unb64(privkey), { name: "Ed25519" }, true, ["sign"]);
-        // Can't directly export public from private in WebCrypto — generate pair is the only way
-        // So we store pubkey alongside privkey; if missing, user must re-generate
         return { data: null, error: { message: "Pubkey missing — call keypair.restore(privkey, pubkey)" } };
       }
 
@@ -204,7 +199,7 @@ const BB = (url: string, key: string) => {
       return Promise.resolve({ data: { session: s }, error: null });
     },
 
-    resetPasswordForEmail: (_email: string) => Promise.resolve({ data: {}, error: null }),
+    resetPasswordForEmail: (email: string) => req("auth/v1/recover", { method: "POST", body: JSON.stringify({ email }) }),
 
     onAuthStateChange: (cb: (event: string, session: any) => void) => {
       authListeners.push(cb);

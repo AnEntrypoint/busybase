@@ -1,21 +1,12 @@
 import type { Client } from "@libsql/client";
 import { fireHook, sendEmail, hooks } from "./hooks.ts";
-import { db as defaultDb, esc, getRowsIn, dbInsertIn, dbUpdateIn, makeUser, makeSession, issueSessionIn, deleteSessionByTokenIn, hashToken, ok, err, getUserFromRequestIn, initAuthTablesFor, sweepExpiredIn } from "./db.ts";
+import { db as defaultDb, esc, getRowsIn, dbInsertIn, dbUpdateIn, makeUser, makeSession, issueSessionIn, deleteSessionByTokenIn, hashToken, ok, err, getUserFromRequestIn, initAuthTablesFor, sweepExpiredIn, makeRateLimiter } from "./db.ts";
 
 const nonces = new Map<string, number>();
 const resetTokens = new Map<string, { uid: string; exp: number }>();
 
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX = 10;
-const rateBuckets = new Map<string, number[]>();
-
-const rateLimited = (key: string): boolean => {
-  const now = Date.now();
-  const hits = (rateBuckets.get(key) || []).filter(t => now - t < RATE_LIMIT_WINDOW_MS);
-  hits.push(now);
-  rateBuckets.set(key, hits);
-  return hits.length > RATE_LIMIT_MAX;
-};
+const authRateLimiter = makeRateLimiter(60_000, 10);
+const rateLimited = authRateLimiter.limited;
 
 const importPubKey = (b64: string) =>
   crypto.subtle.importKey("raw", Uint8Array.from(atob(b64), c => c.charCodeAt(0)), { name: "Ed25519" }, false, ["verify"]);
@@ -26,10 +17,7 @@ export const sweepExpired = async (client: Client = defaultDb) => {
   const now = Date.now();
   for (const [k, exp] of nonces) if (exp < now) nonces.delete(k);
   for (const [k, v] of resetTokens) if (v.exp < now) resetTokens.delete(k);
-  for (const [k, hits] of rateBuckets) {
-    const fresh = hits.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
-    if (fresh.length) rateBuckets.set(k, fresh); else rateBuckets.delete(k);
-  }
+  authRateLimiter.sweep();
   await sweepExpiredIn(client);
 };
 

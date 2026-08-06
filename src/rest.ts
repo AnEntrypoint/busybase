@@ -1,12 +1,17 @@
 import type { Client } from "@libsql/client";
 import { fireHook, pipeHook, hooks } from "./hooks.ts";
 import { broadcastChange } from "./realtime.ts";
-import { validId, openTblIn, ensureTableIn, dbInsertIn, dbUpdateIn, dbDeleteIn, getRowsIn, getAllRowsIn, clean, toFilter, getUserFromRequestIn, ok, err, cors, db as defaultDb } from "./db.ts";
+import { validId, openTblIn, ensureTableIn, dbInsertIn, dbUpdateIn, dbDeleteIn, getRowsIn, getAllRowsIn, clean, toFilter, getUserFromRequestIn, ok, err, cors, db as defaultDb, vecSearch, makeRateLimiter } from "./db.ts";
 
 export type BroadcastFn = (table: string, eventType: "INSERT" | "UPDATE" | "DELETE", newRow: any, oldRow: any) => void;
 
-export const handleRest = async (client: Client, table: string, req: Request, P: Record<string, string>, B: any, broadcast: BroadcastFn = broadcastChange): Promise<Response> => {
+export const restRateLimiter = makeRateLimiter(60_000, 300);
+
+export const handleRest = async (client: Client, table: string, req: Request, P: Record<string, string>, B: any, broadcast: BroadcastFn = broadcastChange, ip = "unknown"): Promise<Response> => {
   if (!validId(table)) return err("Invalid table name");
+
+  const isMutating = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE";
+  if (isMutating && restRateLimiter.limited(ip)) return err("Too many requests, please try again later", 429);
 
   if (hooks.canAccess) {
     const reqUser = await getUserFromRequestIn(client, req).catch(() => null);
@@ -22,10 +27,20 @@ export const handleRest = async (client: Client, table: string, req: Request, P:
     const filter = toFilter(paramsHooked);
     let rows = filter ? await getRowsIn(client, table, filter) : await getAllRowsIn(client, table);
     rows = await pipeHook("afterSelect", rows, table);
+
+    let isVecSearch = false;
+    if (P.vec) {
+      let embedding: unknown;
+      try { embedding = JSON.parse(P.vec); } catch { return err("Invalid vec: must be a JSON array of numbers"); }
+      if (!Array.isArray(embedding) || !embedding.every(n => typeof n === "number")) return err("Invalid vec: must be a JSON array of numbers");
+      isVecSearch = true;
+      rows = vecSearch(rows, embedding, Math.max(0, parseInt(P.limit) || 10));
+    }
+
     const knownCols = rows.length ? new Set(Object.keys(rows[0])) : null;
     if (P.select && P.select !== "*") {
       const requested = P.select.split(",");
-      const invalidSyntax = requested.filter(c => !validId(c));
+      const invalidSyntax = requested.filter(c => !validId(c) && c !== "_distance");
       if (invalidSyntax.length) return err(`Invalid column name in select: ${invalidSyntax.join(", ")}`);
       const unknown = knownCols ? requested.filter(c => !knownCols.has(c)) : [];
       if (unknown.length) return err(`Unknown column in select: ${unknown.join(", ")}`);
@@ -33,12 +48,12 @@ export const handleRest = async (client: Client, table: string, req: Request, P:
     }
     if (P.order) {
       const [col, dir] = P.order.split(".");
-      if (!validId(col)) return err(`Invalid column name in order: ${col}`);
+      if (!validId(col) && col !== "_distance") return err(`Invalid column name in order: ${col}`);
       if (knownCols && !knownCols.has(col)) return err(`Unknown column in order: ${col}`);
       rows.sort((a: any, b: any) => dir === "desc" ? (b[col] > a[col] ? 1 : -1) : (a[col] > b[col] ? 1 : -1));
     }
-    const limit = Math.max(0, parseInt(P.limit) || 1000);
-    const offset = Math.max(0, parseInt(P.offset) || 0);
+    const limit = isVecSearch ? rows.length : Math.max(0, parseInt(P.limit) || 1000);
+    const offset = isVecSearch ? 0 : Math.max(0, parseInt(P.offset) || 0);
     const page = clean(rows).slice(offset, offset + limit);
     const rangeEnd = page.length ? offset + page.length - 1 : 0;
     const extra: Record<string, string> = {};
@@ -100,5 +115,5 @@ export const handleRest = async (client: Client, table: string, req: Request, P:
 };
 
 // Convenience wrapper for the HTTP server, bound to the module-level singleton client.
-export const handleRestDefault = (table: string, req: Request, P: Record<string, string>, B: any) =>
-  handleRest(defaultDb, table, req, P, B);
+export const handleRestDefault = (table: string, req: Request, P: Record<string, string>, B: any, ip = "unknown") =>
+  handleRest(defaultDb, table, req, P, B, broadcastChange, ip);

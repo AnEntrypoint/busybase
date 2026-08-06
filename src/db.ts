@@ -76,10 +76,13 @@ export const ensureTableIn = async (client: Client, name: string, row: Record<st
   await next;
 };
 
+const toCell = (v: any): string | null =>
+  v == null ? null : (typeof v === "object" ? JSON.stringify(v) : String(v));
+
 export const dbInsertIn = async (client: Client, name: string, row: Record<string, any>): Promise<void> => {
   const keys = Object.keys(row);
   const ph = keys.map(() => "?").join(", ");
-  const vals = keys.map(k => row[k] == null ? null : String(row[k]));
+  const vals = keys.map(k => toCell(row[k]));
   await client.execute({ sql: `INSERT INTO ${name} (${keys.join(", ")}) VALUES (${ph})`, args: vals });
 };
 
@@ -103,7 +106,7 @@ export const dbUpdateIn = async (client: Client, name: string, data: Record<stri
   const keys = Object.keys(data).filter(k => k !== "id");
   if (!keys.length) return;
   const sets = keys.map(k => `${k}=?`).join(", ");
-  const vals = keys.map(k => data[k] == null ? null : String(data[k]));
+  const vals = keys.map(k => toCell(data[k]));
   await client.execute({ sql: `UPDATE ${name} SET ${sets} WHERE ${where}`, args: vals });
 };
 
@@ -117,6 +120,54 @@ export const tableNamesIn = async (client: Client): Promise<string[]> => {
 };
 
 export const clean = (rows: any[]) => rows.map(({ pw, pubkey: _pk, ...r }) => r);
+
+export const makeRateLimiter = (windowMs: number, max: number) => {
+  const buckets = new Map<string, number[]>();
+  const limited = (key: string): boolean => {
+    const now = Date.now();
+    const hits = (buckets.get(key) || []).filter(t => now - t < windowMs);
+    hits.push(now);
+    buckets.set(key, hits);
+    return hits.length > max;
+  };
+  const sweep = () => {
+    const now = Date.now();
+    for (const [k, hits] of buckets) {
+      const fresh = hits.filter(t => now - t < windowMs);
+      if (fresh.length) buckets.set(k, fresh); else buckets.delete(k);
+    }
+  };
+  return { limited, sweep };
+};
+
+export const cosineDistance = (a: number[], b: number[]): number | null => {
+  if (a.length !== b.length || !a.length) return null;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  if (na === 0 || nb === 0) return null;
+  return 1 - dot / (Math.sqrt(na) * Math.sqrt(nb));
+};
+
+export const parseVector = (v: unknown): number[] | null => {
+  if (typeof v !== "string" || !v) return null;
+  try {
+    const arr = JSON.parse(v);
+    return Array.isArray(arr) && arr.every(n => typeof n === "number") ? arr : null;
+  } catch { return null; }
+};
+
+export const vecSearch = (rows: any[], embedding: number[], limit: number): any[] => {
+  const scored: Array<{ row: any; dist: number }> = [];
+  for (const row of rows) {
+    const rowVec = parseVector(row.vector);
+    if (!rowVec) continue;
+    const dist = cosineDistance(embedding, rowVec);
+    if (dist === null) continue;
+    scored.push({ row: { ...row, _distance: dist }, dist });
+  }
+  scored.sort((x, y) => x.dist - y.dist);
+  return scored.slice(0, limit).map(s => s.row);
+};
 
 export const makeUser = (u: any) => ({
   id: u.id, email: u.email || null, role: u.role || "authenticated",

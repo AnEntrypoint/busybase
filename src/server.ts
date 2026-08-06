@@ -2,10 +2,11 @@ import { hooks } from "./hooks.ts";
 import { wsHandlers } from "./realtime.ts";
 import { cors, err, tableNames, getAllRows, clean, db } from "./db.ts";
 import { initAuthTables, sweepExpired, handleAuthDefault } from "./auth.ts";
-import { handleRestDefault } from "./rest.ts";
+import { handleRestDefault, restRateLimiter } from "./rest.ts";
 
 const PORT = process.env.BUSYBASE_PORT || 54321;
 const STUDIO_TOKEN = process.env.BUSYBASE_STUDIO_TOKEN;
+const MAX_REQUEST_BODY_SIZE = parseInt(process.env.BUSYBASE_MAX_BODY_SIZE || "") || 10 * 1024 * 1024;
 
 if (!process.env.BUSYBASE_CORS_ORIGIN && process.env.NODE_ENV === "production") {
   console.warn("[BusyBase] BUSYBASE_CORS_ORIGIN is not set (defaulting to \"*\"). This is safe only because auth uses bearer tokens, not cookies. Set BUSYBASE_CORS_ORIGIN explicitly in production.");
@@ -13,6 +14,7 @@ if (!process.env.BUSYBASE_CORS_ORIGIN && process.env.NODE_ENV === "production") 
 
 await initAuthTables();
 setInterval(() => sweepExpired(), 5 * 60_000).unref();
+setInterval(() => restRateLimiter.sweep(), 5 * 60_000).unref();
 
 const mime: Record<string, string> = { ".js": "text/javascript", ".html": "text/html", ".css": "text/css" };
 const ext = (p: string) => p.slice(p.lastIndexOf(".")) || "";
@@ -24,7 +26,7 @@ const studioAuthorized = (req: Request, searchParams: URLSearchParams): boolean 
   return bearer === STUDIO_TOKEN || qtoken === STUDIO_TOKEN;
 };
 
-const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req) => {
+const server = Bun.serve({ port: PORT, maxRequestBodySize: MAX_REQUEST_BODY_SIZE, websocket: wsHandlers, fetch: async (req) => {
   if (req.headers.get("upgrade") === "websocket" && new URL(req.url).pathname === "/realtime/v1/websocket") {
     const upgraded = server.upgrade(req, { data: { tables: new Set() } });
     return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
@@ -48,7 +50,8 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
   if (pathname.startsWith("/rest/v1/")) {
     const table = pathname.slice(9).split("/").map(decodeURIComponent).filter(Boolean)[0];
     if (!table) return err("Table required");
-    return handleRestDefault(table, req, P, B);
+    const ip = server.requestIP(req)?.address || "unknown";
+    return handleRestDefault(table, req, P, B, ip);
   }
 
   if (pathname === "/studio" || pathname === "/studio/" || pathname.startsWith("/studio/")) {
@@ -70,7 +73,13 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
     return Response.json({ data: clean(rows), error: null }, { headers: cors });
   }
 
-  if (pathname === "/studio" || pathname === "/studio/") {
+  if (pathname === "/studio") {
+    const redirectUrl = new URL(req.url);
+    redirectUrl.pathname = "/studio/";
+    return new Response(null, { status: 301, headers: { Location: redirectUrl.pathname + redirectUrl.search, ...cors } });
+  }
+
+  if (pathname === "/studio/") {
     const file = Bun.file(new URL("../studio/index.html", import.meta.url));
     if (await file.exists()) return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
     return err("Studio not found", 404);

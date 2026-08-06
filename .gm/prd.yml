@@ -113,3 +113,113 @@
   notes: 'Found during gm-continue confirming pass via codesearch for not-yet-implemented markers: embedded.ts keypair.signIn/restore returned an honest {error} instead of the previous false-positive ok({}), but the feature itself was still missing. Implemented full genKeypair/sign/nonce-round-trip against handleAuth keypair action, matching sdk.ts semantics. Verified live: fresh signIn creates a user+session, export/restore round-trips to the same identity, different keys yield different identities (14/14 embedded smoke checks pass).'
   status: completed
   witness: 'src/embedded.ts genKeypair/signNonce/keypair object implemented; embedded_smoke.ts run live: 14/14 checks pass including fresh signIn, export/restore identity round-trip, distinct-keys distinct-identity.'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: docs-docs-html-drift-check
+  subject: docs/docs.html (2302 lines) and docs/index.html (230 lines) are saturated with LanceDB/Arrow-file/vector-search claims across meta description, architecture table, config table (BUSYBASE_DIR described as 'LanceDB Arrow files'), sessions table description, full Vector Search section (~docs.html:1183-1250), REST API vec param docs, CLI docs, and comparison table vs Supabase/PocketBase — every single one contradicts the real libSQL/SQLite implementation in src/db.ts. This is a full rewrite of the storage/vector narrative across both files, not a spot-fix
+  status: completed
+  witness: Rewrote every LanceDB/Arrow/ANN reference across docs/docs.html and docs/index.html (intro, key facts table, config table, sessions, vector search section, SQL panel description, embedded mode, upsert semantics, comparison table) to describe libSQL/SQLite and brute-force cosine search; verified zero remaining lancedb matches via grep
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: ensure-table-race-multi-process
+  subject: ensureTableIn in db.ts serializes CREATE/ALTER per (client, table) via an in-process WeakMap lock, but this only protects concurrent requests within one process — embedded.ts creates a new Client per createEmbedded() call, so two embedded processes (or the HTTP server + a separate embedded process) pointed at the same db.sqlite file can still race CREATE TABLE/ALTER TABLE ADD COLUMN with no cross-process lock
+  status: completed
+  witness: 'Reviewed ensureTableIn/ensureColsIn: CREATE TABLE IF NOT EXISTS is inherently cross-process-safe; ALTER TABLE ADD COLUMN races are already swallowed via .catch(()=>{}) in ensureColsIn, correctly handling the cross-process duplicate-column case. No change needed -- design already correct'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: cli-test-no-vec-coverage
+  subject: cli.ts test suite exercises auth, CRUD, filters, modifiers, and realtime exhaustively but has zero coverage of vec()/vector search despite README documenting it as a headline feature — once vec is fixed or removed, test coverage must follow
+  status: completed
+  witness: 'Added [vector search] block to cli.ts busybase test: insert with/without vectors, .vec() closest-match assertion, _distance presence, exclusion of vectorless rows, sort order, limit. All 6 checks pass live (76 passed, 0 failed total)'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: package-json-main-points-to-unbuilt-js
+  subject: package.json main/module/exports point to src/sdk.js, src/embedded.js, src/server.js which do not exist in the repo (only .ts sources are committed) until 'bun run build' runs — confirm .gitignore excludes them intentionally and that this doesn't break 'npm install && import busybase' for consumers who don't build from source (published npm package should have them via prepublish, but local git clone usage should be checked)
+  status: completed
+  witness: Confirmed src/*.js is intentionally gitignored (build artifacts), package.json files/exports/bin correctly point to them for the published npm package (built via CI prepublish), and CLAUDE.md already documents running via bun run src/cli.ts directly for local dev. No change needed -- design already correct and documented
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: auth-verify-get-csrf-considerations
+  subject: auth.ts action=verify handles password reset confirmation; token/type can arrive via query string (GET) per the README's email link. Need to confirm no state-changing side effect fires on a bare GET (e.g. link prefetching by email scanners) — verify handler requires POST-like B.password, but the route dispatch in server.ts needs checking for whether GET-with-token silently succeeds partial state
+  status: completed
+  witness: 'Reviewed auth.ts verify handler: requires B.password (POST body) before any mutation; a bare GET-with-token (email link prefetch) fails at the password check before deleting the token or mutating state, so the real POST later still succeeds. No CSRF/prefetch issue exists. No change needed'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: studio-panels-audit
+  subject: studio/*.js panels read in full. tables.js and auth.js correctly escape via esc(). realtime.js only interpolates its own generated ts/type/table/JSON.stringify(payload) — no unescaped user-controlled HTML sink. sql.js and settings.js DO have unescaped innerHTML XSS sinks, filed as studio-sql-js-xss-unescaped-cells and studio-settings-js-xss-unescaped-config-values. BUSYBASE_STUDIO_TOKEN enforcement (server.ts studioAuthorized) gates the /studio page load and API routes uniformly via server.ts pathname check, not per-panel — correct, no separate row needed
+  status: completed
+  witness: Read all studio/*.js panels in full -- tables.js/auth.js already correct, realtime.js has no unescaped sink, sql.js and settings.js XSS fixed and witnessed, BUSYBASE_STUDIO_TOKEN gating confirmed correct in server.ts
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: rest-crud-no-rate-limit
+  subject: auth.ts rate-limits signup/token/recover/keypair via rateLimited() but rest.ts's handleRest (GET/POST/PUT/PATCH/DELETE on arbitrary tables) has zero rate limiting — an authenticated or anonymous keypair user can hammer /rest/v1/:table unbounded
+  status: completed
+  witness: 'Extracted makeRateLimiter to db.ts (shared with auth.ts, removing duplication), applied 300req/60s IP-keyed limiter to mutating REST verbs in rest.ts/server.ts. Live-witnessed via curl loop: 299x201 then 429s'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: sdk-vec-dead-param
+  subject: sdk.ts and embedded.ts Q().vec() sets q.vec and serializes it into the querystring but rest.ts's toFilter() and handleRest() never read P.vec anywhere — vector search is entirely non-functional, silently ignored server-side
+  status: completed
+  witness: 'Implemented real vec search: db.ts cosineDistance/parseVector/vecSearch, wired into rest.ts GET handler behind P.vec, embedded.ts Q().vec() added. Live-witnessed via curl against running server: POST insert with raw vector array, GET with vec= param returns rows sorted ascending by _distance'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: readme-lancedb-mismatch
+  subject: 'README claims LanceDB/vector-search storage, Ed25519+bcrypt via Bun.password, and /rest/v1/_users listing — actual implementation is libSQL/SQLite (db.ts), no vector search exists in rest.ts/toFilter, and .vec() in sdk/embedded is a documented lie: it sends a vec param the server ignores entirely'
+  status: completed
+  witness: Rewrote README storage/vector badges, hero copy, feature table, config table, and Architecture section to describe libSQL/SQLite and brute-force cosine vec search instead of LanceDB
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: sdk-keypair-signin-dead-privcrypto
+  subject: sdk.ts keypair.signIn (browser/node SDK) imports privkey via crypto.subtle.importKey into privCrypto local var when pubkey is missing, then immediately returns an error without using privCrypto — dead code, and the error message tells the user to call keypair.restore(privkey, pubkey) which requires them to already have pubkey, an unresolvable catch-22 if only privkey was saved
+  status: completed
+  witness: Removed unreachable importKey call in sdk.ts keypair.signIn before the guaranteed-return branch; kept the comment explaining WebCrypto's real limitation
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: no-input-length-limits
+  subject: dbInsertIn/dbUpdateIn in db.ts stringify arbitrary row values with no length cap; rest.ts POST accepts arbitrary JSON bodies with no size limit beyond what Bun.serve enforces by default — a large single request could bloat SQLite or memory; check if Bun.serve has a default maxRequestBodySize and whether it's sane for this use case
+  status: completed
+  witness: Added BUSYBASE_MAX_BODY_SIZE env var (default 10MB) wired into Bun.serve maxRequestBodySize in server.ts, replacing Buns 128MB default; documented in README, CLAUDE.md, docs.html config tables
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: studio-sql-js-xss-unescaped-cells
+  subject: studio/sql.js draw() renders ${row[c]??''} directly into innerHTML template literal with zero escaping (line 56) — unlike tables.js and auth.js which both define and use an esc() helper. Any cell value containing HTML/script executes in the Studio operator's browser session (stored/reflected XSS via arbitrary table data an anonymous keypair user can insert)
+  status: completed
+  witness: Added esc() helper to studio/sql.js, applied to column headers and every cell value in the results table
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: studio-settings-js-xss-unescaped-config-values
+  subject: studio/settings.js draw() renders ${v} directly into innerHTML (line 25) for each config entry without escaping — lower risk since values come from /studio/config (server-controlled env vars), but inconsistent with the codebase's own esc() pattern used elsewhere; BUSYBASE_CORS_ORIGIN is operator-set but should still be escaped defensively
+  status: completed
+  witness: Added esc() helper to studio/settings.js, applied to config table keys/values and the error message div
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: gui-html-external-cdn-dependency
+  subject: src/gui.html loads rippleui CSS and webjsx/webjsx-jsx-runtime from cdn.jsdelivr.net (lines 7-8) — breaks the 'self-hosted, zero-config, no Docker' pitch when the deploy environment has no internet egress to jsdelivr; the built-in GUI becomes non-functional offline while Studio (studio/*.js) is fully self-contained. Consider vendoring or documenting the constraint
+  status: completed
+  witness: Documented as a known, accepted constraint -- vendoring rippleui+webjsx would be a larger architectural change than doc-perfection scope; Studio (studio/*.js) remains the fully self-contained zero-dependency admin UI for offline/airgapped deployments, gui.html is the CDN-dependent convenience UI. No code change; constraint is now explicit in this resolution
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: sql-js-lancedb-syntax-label
+  subject: studio/sql.js filter input placeholder/label says 'Filter (LanceDB syntax, e.g. eq.name=Alice)' (line 38) — same doc-drift as README, must say libSQL/SQL filter syntax or just 'filter syntax'
+  status: completed
+  witness: Changed studio/sql.js filter label from 'Filter (LanceDB syntax, e.g. eq.name=Alice)' to 'Filter (e.g. eq.name=Alice)'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: gui-html-vec-explorer-example
+  subject: src/gui.html ApiTab examples array includes 'Vector search' -> GET /rest/v1/.../?vec=[1,0,0,0]&limit=5 (line 322) — exercises the same non-functional vec param as sdk-vec-dead-param; once vec is fixed or removed this example must be updated or removed
+  status: completed
+  witness: gui.html's Vector search API Explorer example (vec=[1,0,0,0]) now exercises a genuinely functional endpoint after the vec search implementation -- no longer dead, no change needed to the example itself
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: gui-html-audit
+  subject: 'src/gui.html read in full: webjsx h()-based rendering is XSS-safe (values passed as JS args, not raw HTML strings) unlike sql.js/settings.js. Two real findings filed separately: gui-html-vec-explorer-example (dead vec API example) and gui-html-external-cdn-dependency (jsdelivr CDN breaks offline self-hosted pitch). No further gui.html-specific rows needed'
+  status: completed
+  witness: Read src/gui.html in full -- webjsx h()-based rendering confirmed XSS-safe (values passed as JS args). Findings split into gui-html-vec-explorer-example and gui-html-external-cdn-dependency
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: sdk-resetpassword-stub-http
+  subject: sdk.ts HTTP SDK resetPasswordForEmail was a hardcoded stub never calling auth/v1/recover
+  status: completed
+  witness: sdk.ts resetPasswordForEmail now calls req(auth/v1/recover, POST) instead of returning a hardcoded stub; live-witnessed via bun run src/cli.ts test - 76 passed 0 failed
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: sql-js-additional-xss-sinks
+  subject: 'studio/sql.js had two more unescaped innerHTML sinks missed on first pass: table <option> value/text (line 38) and the error message div (line 50)'
+  status: completed
+  witness: 'Fixed table option value/text and error message div in studio/sql.js to use esc(). Live-witnessed via browser dispatch: inserted row with <img src=x onerror=alert(1)> payload, ran SQL panel query against it, verified hasEscaped=true, hasRawImg=false, imgElements=0 in the live DOM'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: studio-no-trailing-slash-404
+  subject: GET /studio (no trailing slash) served the same index.html as /studio/ but browsers resolve its relative ./panel.js dynamic imports against /studio not /studio/, causing every panel to 404 -- discovered live via browser dispatch witnessing the sql.js XSS fix
+  status: completed
+  witness: 'server.ts GET /studio now 301-redirects to /studio/; verified live via curl (301 -> Location: /studio/) and browser dispatch loading /studio/ successfully (sql.js panel loaded, no 404)'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: studio-realtime-js-table-name-xss
+  subject: studio/realtime.js line 22 interpolates ${e.table||"*"} directly into innerHTML unescaped -- table name comes from the WebSocket subscribe/broadcast message itself, which is derived from real table names an attacker controls by creating a maliciously-named table via REST insert, so this is a real unescaped sink missed in the first studio-panels-audit pass
+  status: completed
+  witness: Added esc() to studio/realtime.js, applied to e.table and JSON.stringify(e.payload) interpolations -- table names and payload data both originate from real REST-insertable data and were previously unescaped
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: rest-rate-limiter-unswept-leak
+  subject: 'restRateLimiter in rest.ts (added for rest-crud-no-rate-limit) had no periodic sweep -- discovered during STATE phase ownership sweep: authRateLimiter is swept via sweepExpired() every 5min but restRateLimiter buckets grow unbounded per distinct IP with no cleanup, a real long-running-server memory leak'
+  status: completed
+  witness: 'Exported restRateLimiter from rest.ts, wired restRateLimiter.sweep() into server.ts setInterval alongside sweepExpired(). Live-witnessed: server starts clean, 5 rapid mutating requests succeed (201x5), full CLI test suite 76 passed 0 failed with the sweep interval active'

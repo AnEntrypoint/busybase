@@ -26,12 +26,17 @@ Run `bun run build` to compile `.ts` sources to `.js` artifacts in `src/`. The `
 - `BUSYBASE_STUDIO_TOKEN` — When set, gates all `/studio*` routes behind a token check (`?token=` query param or `Authorization: Bearer` header). Unset by default for zero-config local use; set it before exposing Studio beyond localhost.
 - `BUSYBASE_URL` — Used in password-reset emails
 - `BUSYBASE_SMTP_HOST/PORT/USER/PASS/FROM` — SMTP config for built-in email transport
+- `BUSYBASE_MAX_BODY_SIZE` — Max request body size in bytes (default: `10485760`, 10MB)
 
 ## SQLite Schema
 
 Tables are created on-demand via `CREATE TABLE IF NOT EXISTS` with TEXT columns derived from the first inserted row's keys. New columns are added automatically via `ALTER TABLE ADD COLUMN`. Auth tables (`_users`, `_sessions`) are created at startup with fixed schemas.
 
 No sentinel rows needed — SQLite schema is defined by CREATE TABLE, not by data inference.
+
+## Vector Search
+
+`.vec(embedding, limit)` performs brute-force cosine-similarity search over a JSON-encoded `vector` TEXT column (`db.ts`: `cosineDistance`, `parseVector`, `vecSearch`). Rows are fetched (respecting any other filters), scored, sorted ascending by `_distance`, and truncated to `limit`. Rows with no vector or a length-mismatched vector are excluded, never coerced. `dbInsertIn`/`dbUpdateIn` JSON-encode array/object values automatically, so `insert({ vector: [0.1, 0.2] })` stores valid JSON without the caller stringifying it.
 
 ## Hooks
 Return `{ error: string }` from any hook to abort the operation. Return a transformed value from `pipeHook` hooks (`beforeSelect`, `afterSelect`, `beforeInsert`, `afterInsert`, `beforeUpdate`, `afterUpdate`). Hook file loaded once at startup via `BUSYBASE_HOOKS`.

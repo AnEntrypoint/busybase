@@ -2,13 +2,13 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-7c6af7.svg)](LICENSE)
 [![Built with Bun](https://img.shields.io/badge/Built%20with-Bun-f9f1e1.svg?logo=bun)](https://bun.sh)
-[![LanceDB](https://img.shields.io/badge/Storage-LanceDB-38bdf8.svg)](https://lancedb.com)
+[![libSQL](https://img.shields.io/badge/Storage-libSQL-38bdf8.svg)](https://github.com/tursodatabase/libsql)
 [![Supabase Compatible](https://img.shields.io/badge/API-Supabase%20JS%20v2-3ecf8e.svg)](https://supabase.com/docs/reference/javascript)
 [![Releases](https://img.shields.io/github/v/release/AnEntrypoint/busybase?color=a78bfa)](https://github.com/AnEntrypoint/busybase/releases)
 
 **A minimal, drop-in Supabase alternative — self-hosted, no Docker, no Postgres, no config files.**
 
-Built on [Bun](https://bun.sh) + [LanceDB](https://lancedb.com). Single process. File-based storage. Native **vector search**. **Ed25519 keypair auth** (anonymous-first). Supabase JS v2 compatible API. Ships as a single binary.
+Built on [Bun](https://bun.sh) + [libSQL](https://github.com/tursodatabase/libsql) (SQLite). Single process. File-based storage. Brute-force **vector search**. **Ed25519 keypair auth** (anonymous-first). Supabase JS v2 compatible API. Ships as a single binary.
 
 **[Documentation](https://anentrypoint.github.io/busybase/docs.html)** · **[Website](https://anentrypoint.github.io/busybase/)** · **[Releases](https://github.com/AnEntrypoint/busybase/releases)**
 
@@ -21,7 +21,7 @@ Built on [Bun](https://bun.sh) + [LanceDB](https://lancedb.com). Single process.
 | Supabase JS v2 compatible | ✅ | ✅ | ❌ |
 | Single binary deploy | ✅ | ❌ | ✅ |
 | No Docker required | ✅ | ❌ | ✅ |
-| Native vector search | ✅ | ⚠️ pgvector | ❌ |
+| Vector search | Yes (brute-force) | Partial (pgvector) | No |
 | Ed25519 keypair auth | ✅ | ❌ | ❌ |
 | Anonymous-first auth | ✅ | ⚠️ anon key | ❌ |
 | File-based storage | ✅ | ❌ | ✅ |
@@ -366,7 +366,7 @@ busybase vec embeddings '[1,0,0,0]' 5    # Vector search
 | Variable | Default | Description |
 |---|---|---|
 | `BUSYBASE_PORT` | `54321` | HTTP port |
-| `BUSYBASE_DIR` | `busybase_data` | Data directory (LanceDB Arrow files) |
+| `BUSYBASE_DIR` | `busybase_data` | Data directory (`db.sqlite` file) |
 | `BUSYBASE_URL` | `http://localhost:54321` | Public URL (used in reset email links) |
 | `BUSYBASE_HOOKS` | — | Path to your hooks file |
 | `BUSYBASE_SMTP_HOST` | — | SMTP hostname |
@@ -374,6 +374,7 @@ busybase vec embeddings '[1,0,0,0]' 5    # Vector search
 | `BUSYBASE_SMTP_USER` | — | SMTP username |
 | `BUSYBASE_SMTP_PASS` | — | SMTP password |
 | `BUSYBASE_SMTP_FROM` | SMTP_USER | From address |
+| `BUSYBASE_MAX_BODY_SIZE` | `10485760` (10MB) | Max request body size in bytes |
 
 ---
 
@@ -394,10 +395,10 @@ Download from [Releases](https://github.com/AnEntrypoint/busybase/releases).
 ## Architecture
 
 - **Runtime:** [Bun](https://bun.sh) — native TypeScript, sub-ms startup, single binary compilation
-- **Storage:** [LanceDB](https://lancedb.com) — Apache Arrow columnar files, no server process, `cp -r` to backup
+- **Storage:** [libSQL](https://github.com/tursodatabase/libsql) (SQLite) — single `db.sqlite` file, no server process, `cp -r` to backup
 - **Auth:** Ed25519 via WebCrypto (zero deps) + bcrypt via `Bun.password`
-- **Sessions:** UUID tokens, 7-day expiry, stored in `_sessions` LanceDB table
-- **Vector search:** LanceDB ANN — rows without vectors get a transparent sentinel `[0]`
+- **Sessions:** UUID tokens, 7-day expiry, stored in the `_sessions` table
+- **Vector search:** brute-force cosine similarity over a JSON-encoded `vector` column — rows without a vector are excluded from results, not padded with a sentinel
 - **CLI = SDK = Server** — the CLI uses the real SDK, making `busybase test` a true e2e test runner
 
 ---

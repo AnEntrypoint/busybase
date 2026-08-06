@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BusyBase — Zero-Config Supabase Alternative</title>
-<meta name="description" content="Minimal self-hosted backend built on Bun + LanceDB. Drop-in Supabase JS v2 API, keypair auth, vector search. No Docker.">
+<meta name="description" content="Minimal self-hosted backend built on Bun + libSQL (SQLite). Drop-in Supabase JS v2 API, keypair auth, vector search. No Docker.">
 <style>
 :root{--bg:#0a0a0f;--bg2:#11111a;--border:#2a2a40;--acc:#7c6af7;--acc2:#a78bfa;--green:#34d399;--text:#e2e8f0;--muted:#8892a4;--mono:'JetBrains Mono',monospace}
 *{box-sizing:border-box;margin:0;padding:0}html{scroll-behavior:smooth}
@@ -58,7 +58,7 @@ footer{padding:2.5rem 2rem;max-width:1100px;margin:0 auto;display:flex;align-ite
 </nav>
 <div class="hero">
   <h1>BusyBase<br>Zero-Config Backend</h1>
-  <p class="sub">A <strong>minimal, self-hosted backend</strong> built on Bun + LanceDB. Drop-in Supabase JS v2 API, Ed25519 keypair auth, native vector search — no Docker, no Postgres.</p>
+  <p class="sub">A <strong>minimal, self-hosted backend</strong> built on Bun + libSQL. Drop-in Supabase JS v2 API, Ed25519 keypair auth, vector search — no Docker, no Postgres.</p>
   <div class="cmd">npx busybase serve</div>
   <div class="btns">
     <a href="#quickstart" class="btn btn-p">Get Started</a>
@@ -74,9 +74,9 @@ footer{padding:2.5rem 2rem;max-width:1100px;margin:0 auto;display:flex;align-ite
     <div class="card"><div class="card-icon">&#9889;</div><div class="card-title">Bun-native</div><div class="card-desc">Sub-millisecond startup, native TypeScript, no transpile step.</div><span class="tag">bun serve</span></div>
     <div class="card"><div class="card-icon">&#128268;</div><div class="card-title">Drop-in Supabase SDK</div><div class="card-desc">Same .from().select().eq() API. One-line URL change to migrate.</div><span class="tag">Supabase JS v2</span></div>
     <div class="card"><div class="card-icon">&#128273;</div><div class="card-title">Keypair Auth</div><div class="card-desc">Anonymous-first Ed25519 WebCrypto auth. No passwords needed.</div><span class="tag">WebCrypto</span></div>
-    <div class="card"><div class="card-icon">&#129504;</div><div class="card-title">Native Vector Search</div><div class="card-desc">Store embeddings, query by semantic similarity. Works with any model.</div><span class="tag">LanceDB ANN</span></div>
+    <div class="card"><div class="card-icon">&#129504;</div><div class="card-title">Vector Search</div><div class="card-desc">Store embeddings, query by cosine similarity. Works with any model.</div><span class="tag">brute-force cosine</span></div>
     <div class="card"><div class="card-icon">&#128295;</div><div class="card-title">Studio UI</div><div class="card-desc">Built-in browser UI at /studio — browse tables, manage users, watch realtime events.</div><span class="tag">/studio</span></div>
-    <div class="card"><div class="card-icon">&#128193;</div><div class="card-title">File-Based Storage</div><div class="card-desc">LanceDB stores data as Arrow files. Back up with cp -r. No migrations.</div><span class="tag">LanceDB &middot; Arrow</span></div>
+    <div class="card"><div class="card-icon">&#128193;</div><div class="card-title">File-Based Storage</div><div class="card-desc">Single SQLite file. Back up with cp -r. No migrations.</div><span class="tag">libSQL &middot; SQLite</span></div>
     <div class="card"><div class="card-icon">&#9889;</div><div class="card-title">Realtime Events</div><div class="card-desc">WebSocket subscriptions for INSERT, UPDATE, DELETE. Supabase-compatible channel API.</div><span class="tag">WebSocket</span></div>
     <div class="card"><div class="card-icon">&#128230;</div><div class="card-title">Embedded Mode</div><div class="card-desc">Run in-process with no HTTP server. Same API for CLI tools, desktop apps, serverless.</div><span class="tag">busybase/embedded</span></div>
   </div>
@@ -202,7 +202,7 @@ await db.auth.signUp({ email: 'a@b.com', password: 'pass' });</pre>
       <tr><td>Supabase JS v2 API</td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td></tr>
       <tr><td>Single binary deploy</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="ok">&#10003;</span></td></tr>
       <tr><td>No Docker required</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="ok">&#10003;</span></td></tr>
-      <tr><td>Native vector search</td><td><span class="ok">&#10003;</span></td><td><span class="half">~ (pgvector)</span></td><td><span class="no">&#10007;</span></td></tr>
+      <tr><td>Vector search</td><td><span class="ok">&#10003;</span></td><td><span class="half">~ (pgvector)</span></td><td><span class="no">&#10007;</span></td></tr>
       <tr><td>Ed25519 keypair auth</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="no">&#10007;</span></td></tr>
       <tr><td>File-based storage</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="ok">&#10003;</span></td></tr>
       <tr><td>Built-in Studio UI</td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td></tr>

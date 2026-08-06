@@ -665,8 +665,8 @@
     <div class="doc-section" id="intro">
       <h1 class="doc-title">BusyBase Docs</h1>
       <p class="doc-intro">
-        BusyBase is a minimal, self-hosted backend built on <strong>Bun</strong> and <strong>LanceDB</strong>.
-        It provides a Supabase JS v2-compatible API, Ed25519 keypair authentication, native vector search,
+        BusyBase is a minimal, self-hosted backend built on <strong>Bun</strong> and <strong>libSQL</strong> (SQLite).
+        It provides a Supabase JS v2-compatible API, Ed25519 keypair authentication, vector search,
         and a pluggable hooks system — with zero config, no Docker, and no external database process.
       </p>
 
@@ -681,10 +681,10 @@
           <thead><tr><th>Property</th><th>Value</th></tr></thead>
           <tbody>
             <tr><td>Runtime</td><td>Bun (TypeScript, zero transpile)</td></tr>
-            <tr><td>Storage</td><td>LanceDB — Apache Arrow file-based, no server process</td></tr>
+            <tr><td>Storage</td><td>libSQL (SQLite) — single file, no server process</td></tr>
             <tr><td>Auth</td><td>Ed25519 keypair (WebCrypto) + email/password (bcrypt via Bun.password)</td></tr>
-            <tr><td>Sessions</td><td>UUID tokens, 7-day expiry, stored in LanceDB _sessions table</td></tr>
-            <tr><td>Vector search</td><td>LanceDB ANN — store <code>vector</code> field, query with <code>.vec(embedding, limit)</code></td></tr>
+            <tr><td>Sessions</td><td>UUID tokens, 7-day expiry, stored in the <code>_sessions</code> table</td></tr>
+            <tr><td>Vector search</td><td>Brute-force cosine similarity — store a <code>vector</code> field, query with <code>.vec(embedding, limit)</code></td></tr>
             <tr><td>Response shape</td><td><code>&#123; data, error &#125;</code> — Supabase v2 compatible throughout</td></tr>
             <tr><td>Default port</td><td>54321 (same as Supabase local dev)</td></tr>
             <tr><td>License</td><td>MIT</td></tr>
@@ -750,7 +750,7 @@ console.log(todos); // [{ id: "...", title: "Learn BusyBase", done: "false" }]
 // Vector search
 await db.from("docs").insert([
   { text: "Bun is fast", vector: [0.9, 0.1] },
-  { text: "LanceDB rocks", vector: [0.1, 0.9] },
+  { text: "SQLite rocks", vector: [0.1, 0.9] },
 ]);
 const { data: results } = await db.from("docs").select("*").vec([0.85, 0.15], 1);
 // results[0].text === "Bun is fast"</code></pre>
@@ -778,7 +778,7 @@ bunx busybase test
             <tr>
               <td class="env-name">BUSYBASE_DIR</td>
               <td><code>busybase_data</code></td>
-              <td>Directory where LanceDB Arrow files are stored</td>
+              <td>Directory where the SQLite database file is stored</td>
             </tr>
             <tr>
               <td class="env-name">BUSYBASE_URL</td>
@@ -789,6 +789,21 @@ bunx busybase test
               <td class="env-name">BUSYBASE_HOOKS</td>
               <td>—</td>
               <td>Path to your hooks file (e.g. <code>./hooks.ts</code>)</td>
+            </tr>
+            <tr>
+              <td class="env-name">BUSYBASE_CORS_ORIGIN</td>
+              <td><code>*</code></td>
+              <td>CORS <code>Access-Control-Allow-Origin</code> header value</td>
+            </tr>
+            <tr>
+              <td class="env-name">BUSYBASE_STUDIO_TOKEN</td>
+              <td>—</td>
+              <td>When set, gates all <code>/studio*</code> routes behind a token check (<code>?token=</code> query param or <code>Authorization: Bearer</code> header)</td>
+            </tr>
+            <tr>
+              <td class="env-name">BUSYBASE_MAX_BODY_SIZE</td>
+              <td><code>10485760</code> (10MB)</td>
+              <td>Max request body size in bytes</td>
             </tr>
           </tbody>
         </table>
@@ -1123,7 +1138,7 @@ await db.auth.signOut();  // invalidates session token on server</code></pre>
     <!-- ── Sessions ── -->
     <div class="doc-section" id="sessions">
       <h2>Sessions</h2>
-      <p>Sessions are UUID tokens stored in the <code>_sessions</code> LanceDB table. They expire after 7 days.</p>
+      <p>Sessions are UUID tokens stored in the <code>_sessions</code> table. They expire after 7 days.</p>
 
 <pre><code class="language-typescript">// ── Get current session (local, no network call) ──
 const { data: { session } } = await db.auth.getSession();
@@ -1183,7 +1198,7 @@ curl -X POST http://localhost:54321/auth/v1/verify \
     <!-- ── Vector Search ── -->
     <div class="doc-section" id="vector-search">
       <h2>Vector Search</h2>
-      <p>Every table can store a <code>vector</code> field alongside regular data. BusyBase uses LanceDB's ANN (Approximate Nearest Neighbor) search to find similar rows. Rows without a vector get a transparent sentinel <code>[0]</code> and are excluded from vector queries.</p>
+      <p>Every table can store a <code>vector</code> field alongside regular data. BusyBase computes brute-force cosine similarity in-process to find similar rows — there is no ANN index, so search time scales linearly with row count. Rows without a vector (or whose vector length doesn't match the query embedding) are excluded from results, never padded with a sentinel.</p>
 
       <h3>Insert with vectors</h3>
 <pre><code class="language-typescript">// Insert rows with a "vector" field
@@ -1335,7 +1350,7 @@ db.removeAllChannels();</code></pre>
             <tr><td><strong>Tables</strong></td><td>Browse all tables, view rows, inline edit cells, add/delete rows</td></tr>
             <tr><td><strong>Auth</strong></td><td>List users from <code>_users</code>, create new users via signup form</td></tr>
             <tr><td><strong>Realtime</strong></td><td>Live event log — see INSERT/UPDATE/DELETE events in real time via WebSocket</td></tr>
-            <tr><td><strong>SQL</strong></td><td>Query panel with table dropdown and LanceDB filter syntax input</td></tr>
+            <tr><td><strong>SQL</strong></td><td>Query panel with table dropdown and filter syntax input</td></tr>
             <tr><td><strong>Settings</strong></td><td>View current config (env vars, no secrets exposed) and SDK usage snippet</td></tr>
           </tbody>
         </table>
@@ -1363,7 +1378,7 @@ db.removeAllChannels();</code></pre>
     <!-- ── Embedded Mode ── -->
     <div class="doc-section" id="embedded">
       <h2>Embedded Mode</h2>
-      <p>BusyBase can run entirely in-process with no HTTP server. Use <code>createEmbedded()</code> for zero-config local usage — same API as the HTTP SDK but operating directly on LanceDB.</p>
+      <p>BusyBase can run entirely in-process with no HTTP server. Use <code>createEmbedded()</code> for zero-config local usage — same API as the HTTP SDK but operating directly on libSQL.</p>
 
       <h3>Setup</h3>
 <pre><code class="language-typescript">import { createEmbedded } from "busybase/embedded";
@@ -1908,7 +1923,7 @@ await db.from("todos").insert([{ title: "A" }, { title: "B" }]);</code></pre>
 <pre><code class="language-typescript">const { data } = await db.from("todos").update({ done: true }).eq("id", "abc");</code></pre>
 
       <h4>from(table).upsert(data)</h4>
-      <p>Alias for <code>insert</code> in BusyBase (LanceDB doesn't support true upsert at the SQL level).</p>
+      <p>Checks for an existing row by <code>id</code> and issues an update or insert accordingly (application-level upsert; SQLite's native <code>INSERT ... ON CONFLICT</code> is not used).</p>
 
       <h4>from(table).delete()</h4>
       <p>Delete rows matching a filter. Must chain at least one filter method.</p>

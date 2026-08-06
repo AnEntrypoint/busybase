@@ -52,7 +52,7 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
   const unwrap = async (res: Response) => res.json();
 
   const Q = (table: string, method?: string, body?: any) => {
-    const q = { filters: [] as string[], order: "", limit: 0, offset: 0, select: "*", count: "" };
+    const q = { filters: [] as string[], order: "", limit: 0, offset: 0, select: "*", count: "", vec: "" };
     let _single = false, _maybe = false;
 
     const resolve = async () => {
@@ -68,6 +68,7 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
       if (q.limit) P.limit = String(q.limit);
       if (q.offset) P.offset = String(q.offset);
       if (q.count) P.count = q.count;
+      if (q.vec) P.vec = q.vec;
 
       const req = authedRequest(method || "GET", method === "PATCH" || method === "PUT" ? body : undefined);
       const res = await handleRest(db, table, req, P, method === "PATCH" || method === "PUT" ? body : {}, broadcast);
@@ -102,6 +103,7 @@ export const createEmbedded = async (config: EmbeddedConfig = {}) => {
       offset: (n: number) => (q.offset = n, b),
       range: (from: number, to: number) => (q.offset = from, q.limit = to - from + 1, b),
       count: (t = "exact") => (q.count = t, b),
+      vec: (embedding: number[], limit = 10) => (q.vec = JSON.stringify(embedding), q.limit = limit, b),
       single: () => (_single = true, b),
       maybeSingle: () => (_maybe = true, b),
       then: (res: any, rej: any) => resolve().then(res, rej),

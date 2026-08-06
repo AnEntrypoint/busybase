@@ -1,3 +1,7 @@
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 export function render(container) {
   let ws = null, events = [], connected = false;
 
@@ -19,8 +23,8 @@ export function render(container) {
             events.map(e => `<div style="margin-bottom:6px;color:#e2e8f0">
               <span style="color:#64748b">${e.ts}</span>
               <span style="color:${e.type==='INSERT'?'#34d399':e.type==='UPDATE'?'#fbbf24':e.type==='DELETE'?'#f87171':'#a78bfa'};margin:0 6px">${e.type}</span>
-              <span style="color:#7dd3fc">${e.table||'*'}</span>
-              <span style="color:#94a3b8;margin-left:6px">${JSON.stringify(e.payload)}</span>
+              <span style="color:#7dd3fc">${esc(e.table||'*')}</span>
+              <span style="color:#94a3b8;margin-left:6px">${esc(JSON.stringify(e.payload))}</span>
             </div>`).join('')}
         </div>
       </div>`;
