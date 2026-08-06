@@ -268,6 +268,18 @@ else if (cmd === "test") {
   const vecLimited = await db.from(vecTbl).select("*").vec([0.85, 0.15, 0.0, 0.0], 1);
   check(".vec — limit respected", vecLimited.data?.length === 1, vecLimited.data);
 
+  console.log("\n[column validation]");
+  const badSelectNonEmpty = await db.from(tbl).select("bogus_col");
+  check("select unknown column (non-empty result set) — 400", !!badSelectNonEmpty.error, badSelectNonEmpty);
+  const badOrderNonEmpty = await db.from(tbl).select("*").order("bogus_col");
+  check("order unknown column (non-empty result set) — 400", !!badOrderNonEmpty.error, badOrderNonEmpty);
+  const badSelectEmpty = await db.from(tbl).select("bogus_col").eq("name", "NoSuchPersonAtAll");
+  check("select unknown column (empty result set) — 400", !!badSelectEmpty.error, badSelectEmpty);
+  const badOrderEmpty = await db.from(tbl).select("*").eq("name", "NoSuchPersonAtAll").order("bogus_col");
+  check("order unknown column (empty result set) — 400", !!badOrderEmpty.error, badOrderEmpty);
+  const goodSelectEmpty = await db.from(tbl).select("name").eq("name", "NoSuchPersonAtAll");
+  check("select known column (empty result set) — ok", !goodSelectEmpty.error, goodSelectEmpty);
+
   console.log("\n[update + delete]");
   const upd = await db.from(tbl).update({ score: "99" }).eq("name", "Alice");
   check(".update.eq — score=99", upd.data?.[0]?.score === "99", upd.data);
@@ -355,6 +367,22 @@ else if (cmd === "test") {
   check("realtime DELETE event.new is null", rtDel?.new === null, rtDel);
   check("realtime DELETE old.name=rt_alice", rtDel?.old?.name === "rt_alice", rtDel);
   ws1.close();
+
+  const rtAuthTbl = `rtauth_${Date.now()}`;
+  const kpReauth = await db.auth.keypair.signIn();
+  const authToken = kpReauth.data?.session?.access_token;
+  const ws2 = new (globalThis as any).WebSocket(`${wsUrl}?token=${authToken}`);
+  await wsWait(ws2, "open");
+  ws2.send(JSON.stringify({ type: "subscribe", table: rtAuthTbl }));
+  const recv4: Promise<any> = new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error("timeout authenticated subscribe INSERT")), 3000);
+    ws2.onmessage = (e: any) => { clearTimeout(t); res(JSON.parse(typeof e.data === "string" ? e.data : e.data.toString())); };
+  });
+  await db.from(rtAuthTbl).insert({ name: "auth_probe" });
+  let rtAuthMsg: any;
+  try { rtAuthMsg = await recv4; } catch { rtAuthMsg = null; }
+  check("realtime subscribe with ?token= still receives events", rtAuthMsg?.eventType === "INSERT", rtAuthMsg);
+  ws2.close();
 
   // Test 4: SDK channel() subscribe
   const rtTbl2 = `rt2_${Date.now()}`;

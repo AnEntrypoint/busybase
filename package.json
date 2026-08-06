@@ -25,7 +25,9 @@
     "src/embedded.js",
     "src/hooks.js",
     "src/realtime.js",
-    "studio/"
+    "src/gui.html",
+    "studio/",
+    "docs/"
   ],
   "publishConfig": {
     "access": "public"

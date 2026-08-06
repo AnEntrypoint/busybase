@@ -52,9 +52,13 @@ export const mkTblIn = async (client: Client, name: string, row: Record<string, 
   return name;
 };
 
-export const ensureColsIn = async (client: Client, name: string, row: Record<string, any>): Promise<void> => {
+export const getTableColumnsIn = async (client: Client, name: string): Promise<Set<string>> => {
   const info = await client.execute(`PRAGMA table_info(${name})`);
-  const existing = new Set(info.rows.map((r: any) => r.name as string));
+  return new Set(info.rows.map((r: any) => r.name as string));
+};
+
+export const ensureColsIn = async (client: Client, name: string, row: Record<string, any>): Promise<void> => {
+  const existing = await getTableColumnsIn(client, name);
   for (const k of Object.keys(row)) {
     if (!existing.has(k)) await client.execute(`ALTER TABLE ${name} ADD COLUMN ${k} TEXT`).catch(() => {});
   }

@@ -2,7 +2,8 @@ import type { ServerWebSocket } from "bun";
 import { validId } from "./db.ts";
 import { fireHook, hooks } from "./hooks.ts";
 
-type WSData = { tables: Set<string> };
+type WSUser = { id: string; email: string | null; role: string } | null;
+type WSData = { tables: Set<string>; user?: WSUser };
 
 const registry = new Map<string, Set<ServerWebSocket<WSData>>>();
 
@@ -14,7 +15,10 @@ const sub = (ws: ServerWebSocket<WSData>, table: string) => {
 
 const unsub = (ws: ServerWebSocket<WSData>, table: string) => {
   ws.data.tables.delete(table);
-  registry.get(table)?.delete(ws);
+  const subs = registry.get(table);
+  if (!subs) return;
+  subs.delete(ws);
+  if (subs.size === 0) registry.delete(table);
 };
 
 export const broadcastChange = (table: string, eventType: "INSERT" | "UPDATE" | "DELETE", newRow: any, oldRow: any) => {
@@ -28,7 +32,7 @@ export const broadcastChange = (table: string, eventType: "INSERT" | "UPDATE" | 
 };
 
 export const wsHandlers = {
-  open(ws: ServerWebSocket<WSData>) { ws.data = { tables: new Set() }; },
+  open(ws: ServerWebSocket<WSData>) { ws.data.tables = new Set(); },
   message(ws: ServerWebSocket<WSData>, raw: string | Buffer) {
     (async () => {
       try {
@@ -36,7 +40,7 @@ export const wsHandlers = {
         if (msg.type === "subscribe" && msg.table) {
           if (!validId(msg.table)) return;
           if (hooks.canAccess) {
-            const denied = await fireHook("canAccess", { user: null, table: msg.table, method: "GET" });
+            const denied = await fireHook("canAccess", { user: ws.data.user ?? null, table: msg.table, method: "GET" });
             if (denied) return;
           }
           sub(ws, msg.table);
@@ -45,6 +49,6 @@ export const wsHandlers = {
     })();
   },
   close(ws: ServerWebSocket<WSData>) {
-    for (const table of ws.data?.tables ?? []) registry.get(table)?.delete(ws);
+    for (const table of [...(ws.data?.tables ?? [])]) unsub(ws, table);
   },
 };

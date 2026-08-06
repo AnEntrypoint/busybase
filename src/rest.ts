@@ -1,7 +1,7 @@
 import type { Client } from "@libsql/client";
 import { fireHook, pipeHook, hooks } from "./hooks.ts";
 import { broadcastChange } from "./realtime.ts";
-import { validId, openTblIn, ensureTableIn, dbInsertIn, dbUpdateIn, dbDeleteIn, getRowsIn, getAllRowsIn, clean, toFilter, getUserFromRequestIn, ok, err, cors, db as defaultDb, vecSearch, makeRateLimiter } from "./db.ts";
+import { validId, openTblIn, ensureTableIn, dbInsertIn, dbUpdateIn, dbDeleteIn, getRowsIn, getAllRowsIn, clean, toFilter, getUserFromRequestIn, ok, err, cors, db as defaultDb, vecSearch, makeRateLimiter, getTableColumnsIn, tableExistsIn } from "./db.ts";
 
 export type BroadcastFn = (table: string, eventType: "INSERT" | "UPDATE" | "DELETE", newRow: any, oldRow: any) => void;
 
@@ -37,19 +37,22 @@ export const handleRest = async (client: Client, table: string, req: Request, P:
       rows = vecSearch(rows, embedding, Math.max(0, parseInt(P.limit) || 10));
     }
 
-    const knownCols = rows.length ? new Set(Object.keys(rows[0])) : null;
+    let knownCols = rows.length ? new Set(Object.keys(rows[0])) : null;
+    if (!knownCols && (P.select && P.select !== "*" || P.order) && await tableExistsIn(client, table)) {
+      knownCols = await getTableColumnsIn(client, table);
+    }
     if (P.select && P.select !== "*") {
       const requested = P.select.split(",");
       const invalidSyntax = requested.filter(c => !validId(c) && c !== "_distance");
       if (invalidSyntax.length) return err(`Invalid column name in select: ${invalidSyntax.join(", ")}`);
-      const unknown = knownCols ? requested.filter(c => !knownCols.has(c)) : [];
+      const unknown = knownCols ? requested.filter(c => !knownCols!.has(c) && c !== "_distance") : [];
       if (unknown.length) return err(`Unknown column in select: ${unknown.join(", ")}`);
       rows = rows.map((r: any) => Object.fromEntries(requested.map(c => [c, r[c]])));
     }
     if (P.order) {
       const [col, dir] = P.order.split(".");
       if (!validId(col) && col !== "_distance") return err(`Invalid column name in order: ${col}`);
-      if (knownCols && !knownCols.has(col)) return err(`Unknown column in order: ${col}`);
+      if (knownCols && !knownCols.has(col) && col !== "_distance") return err(`Unknown column in order: ${col}`);
       rows.sort((a: any, b: any) => dir === "desc" ? (b[col] > a[col] ? 1 : -1) : (a[col] > b[col] ? 1 : -1));
     }
     const limit = isVecSearch ? rows.length : Math.max(0, parseInt(P.limit) || 1000);

@@ -1,6 +1,6 @@
 import { hooks } from "./hooks.ts";
 import { wsHandlers } from "./realtime.ts";
-import { cors, err, tableNames, getAllRows, clean, db } from "./db.ts";
+import { cors, err, tableNames, getAllRows, clean, db, getUserFromRequestIn } from "./db.ts";
 import { initAuthTables, sweepExpired, handleAuthDefault } from "./auth.ts";
 import { handleRestDefault, restRateLimiter } from "./rest.ts";
 
@@ -28,7 +28,9 @@ const studioAuthorized = (req: Request, searchParams: URLSearchParams): boolean 
 
 const server = Bun.serve({ port: PORT, maxRequestBodySize: MAX_REQUEST_BODY_SIZE, websocket: wsHandlers, fetch: async (req) => {
   if (req.headers.get("upgrade") === "websocket" && new URL(req.url).pathname === "/realtime/v1/websocket") {
-    const upgraded = server.upgrade(req, { data: { tables: new Set() } });
+    const wsToken = req.headers.get("Authorization")?.split(" ")[1] || new URL(req.url).searchParams.get("token");
+    const wsUser = wsToken ? await getUserFromRequestIn(db, new Request(req.url, { headers: { Authorization: `Bearer ${wsToken}` } })).catch(() => null) : null;
+    const upgraded = server.upgrade(req, { data: { tables: new Set(), user: wsUser } });
     return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
   }
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });

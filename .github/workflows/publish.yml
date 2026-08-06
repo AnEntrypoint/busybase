@@ -20,6 +20,12 @@ jobs:
 
       - run: bun install
 
+      - name: Run test suite
+        run: |
+          BUSYBASE_PORT=54329 bun run src/cli.ts serve &
+          sleep 2
+          BUSYBASE_URL=http://localhost:54329 bun run src/cli.ts test
+
       - run: bun build src/server.ts --target=bun --outfile=src/server.js --external @libsql/client
       - run: bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js
       - run: bun build src/cli.ts --target=bun --outfile=src/cli.js --external @libsql/client

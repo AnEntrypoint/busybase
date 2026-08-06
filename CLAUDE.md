@@ -28,6 +28,11 @@ Run `bun run build` to compile `.ts` sources to `.js` artifacts in `src/`. The `
 - `BUSYBASE_SMTP_HOST/PORT/USER/PASS/FROM` — SMTP config for built-in email transport
 - `BUSYBASE_MAX_BODY_SIZE` — Max request body size in bytes (default: `10485760`, 10MB)
 
+## Single-Process Assumptions
+
+- `auth.ts`'s `nonces` (keypair auth challenges) and `resetTokens` (password recovery) are in-process `Map`s, not persisted to the DB. A keypair nonce or reset token issued by one process is invisible to any other — running multiple BusyBase instances behind a load balancer against the same `db.sqlite` will intermittently fail keypair sign-in and password-reset verification whenever the two legs of the flow land on different instances. Single-instance deployment is the supported model; a multi-instance deployment needs these moved into the DB.
+- `GET /rest/v1/:table` with no `.limit()` call defaults to 1000 rows (`rest.ts`), independent of the hard `MAX_ROWS_FETCHED=50000` SQL-level ceiling in `db.ts`. A table with more than 1000 rows and no explicit `.limit()`/`.range()` silently returns a truncated first page — pass `count=exact` (or `Prefer: count=exact`) to see the real total via the response's `count` field / `Content-Range` header.
+
 ## SQLite Schema
 
 Tables are created on-demand via `CREATE TABLE IF NOT EXISTS` with TEXT columns derived from the first inserted row's keys. New columns are added automatically via `ALTER TABLE ADD COLUMN`. Auth tables (`_users`, `_sessions`) are created at startup with fixed schemas.

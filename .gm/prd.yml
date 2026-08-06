@@ -308,3 +308,48 @@
   subject: gui.html only calls loadTables() when tryRestoreKeypair() succeeds -- but S.tables is a plain localStorage-persisted list unrelated to auth state, so a user who never had a keypair (fresh browser/incognito) or who uses email/password auth never sees their previously-added table list at all on page load
   status: completed
   witness: 'Changed startup sequence to call loadTables() unconditionally (not gated on tryRestoreKeypair() success). Live-witnessed: a fresh browser context with localStorage tables set but no keypair credentials still shows the persisted table list on page load'
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: hooks-smtp-multichunk-response-not-handled
+  subject: hooks.ts smtpSend's wait()/data() handler assumes each TCP data event is one complete SMTP reply line, and wait() falls back to a blind 5000ms timeout treating whatever partial data arrived as the full response -- a slow-but-healthy SMTP server (response after 5s) or a reply split across two TCP packets can produce a spurious failure or a bogus status-code parse from a truncated line, distinct from the already-fixed always-succeeds bug
+  status: completed
+  witness: Rewrote smtpSend's data handler to accumulate a buffer across TCP data events and detect reply completion via the real SMTP multi-line convention (code+space = terminal line, code+dash = continuation), replacing the single-data-event-is-a-complete-reply assumption. Also replaced the blind 5s success-fallback with a 15s timeout that rejects (fails loud) instead of silently treating a partial buffer as a complete reply
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: realtime-canaccess-hardcoded-null-user
+  subject: 'realtime.ts wsHandlers.message calls fireHook(''canAccess'', {user: null, table, method:''GET''}) unconditionally on every subscribe -- unlike REST''s canAccess check (rest.ts) which resolves the real authenticated user via getUserFromRequestIn, the WebSocket subscribe path never attempts to identify the connecting user at all, so any canAccess hook checking user identity/role always sees an anonymous null user over realtime even for an authenticated session, a real capability gap versus the REST path''s per-request auth'
+  status: completed
+  witness: 'server.ts now resolves the real authenticated user at WebSocket upgrade time (Authorization header or ?token= query param, same pattern as Studio''s token auth) and threads it into ws.data.user, which realtime.ts''s canAccess hook call now reads instead of a hardcoded null. Live-witnessed via a custom hooks.ts probe: an authenticated keypair session''s real user id appears in the canAccess hook call over a WebSocket subscribe, while an anonymous connection still correctly receives user:null. Added a CLI test suite check verifying a ?token=-authenticated WS connection still subscribes and receives events correctly'
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: ci-no-test-gate-before-publish-release
+  subject: Neither .github/workflows/publish.yml (npm publish) nor release.yml (binary builds) runs the existing 76+-check busybase test CLI suite before shipping -- a regression in auth/CRUD/filters/vec/realtime could publish to npm or GitHub Releases with zero automated verification despite the test suite already existing and being comprehensive
+  status: completed
+  witness: 'Added a Run test suite step (start server, run busybase test) before the build steps in publish.yml, and a new gated test job (needs: by the build job) in release.yml. Verified locally: full test suite (82 checks) passes against a running server using the same command sequence'
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: package-json-missing-docs-dir
+  subject: package.json files array (lines 20-27) lists src/*.js and studio/ but never docs/, even though server.ts staticRoutes serves /docs and /site from ../docs/docs.html and ../docs/index.html relative to the built server.js -- npm install busybase && busybase serve gets 404s on /docs and /site
+  status: completed
+  witness: Added docs/ to package.json files array
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: rest-get-default-limit-undocumented
+  subject: rest.ts GET defaults to limit=1000 (Math.max(0,parseInt(P.limit)||1000)) when the caller passes no .limit(), silently truncating any table with more than 1000 rows and no signal unless count=exact is explicitly requested -- not documented in README/CLAUDE.md/docs.html's REST API section alongside the already-documented MAX_ROWS_FETCHED=50000 hard ceiling
+  status: completed
+  witness: Documented the 1000-row default GET limit and the count=exact escape hatch in CLAUDE.md's new Single-Process Assumptions section, alongside the existing MAX_ROWS_FETCHED=50000 hard ceiling
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: realtime-registry-empty-set-never-pruned
+  subject: realtime.ts registry Map never removes a table's Set entry once created, even after every subscriber unsubscribes/disconnects and the Set becomes empty -- a server that sees subscriptions to many distinct table names over its uptime accumulates empty Set objects in the Map forever, a slow unbounded-growth memory leak proportional to distinct-tables-ever-subscribed, not distinct-tables-currently-subscribed
+  status: completed
+  witness: 'unsub() now deletes the table''s Set entry from the registry Map once it''s empty, and close() was fixed to call unsub() per table (was previously bypassing pruning with a raw registry.get(table)?.delete(ws)). Live-witnessed: realtime subscribe/insert/receive cycle still works correctly after the refactor (76+ CLI test suite realtime checks pass unchanged)'
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: package-json-missing-gui-html
+  subject: package.json files array was also missing src/gui.html (served at / and /gui by server.ts) alongside the already-flagged missing docs/ -- discovered while fixing package-json-missing-docs-dir
+  status: completed
+  witness: Added src/gui.html to package.json files array (discovered while fixing the docs/ gap)
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: auth-nonces-resettokens-inprocess-undocumented
+  subject: auth.ts nonces/resetTokens are undocumented in-process Maps, a multi-instance deployment constraint
+  status: completed
+  witness: Documented in CLAUDE.md Single-Process Assumptions section
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: rest-empty-result-column-validation-skipped
+  subject: rest.ts knownCols is null on empty result sets, letting bogus select/order columns silently pass
+  status: completed
+  witness: 'Added getTableColumnsIn via PRAGMA table_info, wired into rest.ts GET when knownCols is null but select/order need validation. Live-witnessed via curl: bogus columns rejected with 400 on empty result sets too. Added 5 CLI test suite checks, 82 total passing'

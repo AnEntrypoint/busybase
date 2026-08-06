@@ -55,25 +55,31 @@ const b64e = (s: string) => Buffer.from(s).toString("base64");
 
 const smtpSend = async (to: string, subject: string, html: string) => {
   if (!smtpHost) return false;
-  let lastLines: string[] = [];
+  let buffer = "";
   let notify: (() => void) | null = null;
   const useTls = smtpPort === 465;
+  const isTerminalReplyLine = (line: string | undefined): boolean => !!line && /^\d{3} /.test(line);
+  const isMultiLineReplyComplete = (buf: string): boolean => {
+    const lines = buf.split("\r\n").filter(Boolean);
+    return isTerminalReplyLine(lines[lines.length - 1]);
+  };
   const conn = await Bun.connect({
     hostname: smtpHost, port: smtpPort, tls: useTls,
     socket: {
       open() {},
-      data(_s, d) { lastLines = d.toString().split("\r\n").filter(Boolean); notify?.(); },
+      data(_s, d) { buffer += d.toString(); if (isMultiLineReplyComplete(buffer)) notify?.(); },
       error(_s, e) { console.error("[SMTP]", e); },
       close() {},
     },
   });
   const send = (l: string) => conn.write(l + "\r\n");
-  const wait = (): Promise<string[]> => new Promise(r => {
-    notify = () => r(lastLines);
-    setTimeout(() => r(lastLines), 5000);
+  const wait = (label: string): Promise<string[]> => new Promise((resolve, reject) => {
+    buffer = "";
+    notify = () => resolve(buffer.split("\r\n").filter(Boolean));
+    setTimeout(() => reject(new Error(`SMTP ${label} timed out waiting for a complete reply: ${JSON.stringify(buffer)}`)), 15000);
   });
   const expectOk = async (label: string) => {
-    const lines = await wait();
+    const lines = await wait(label);
     const code = parseInt(lines[lines.length - 1]?.slice(0, 3) || "0");
     if (code >= 400 || code === 0) throw new Error(`SMTP ${label} failed: ${lines.join(" ") || "no response"}`);
   };
