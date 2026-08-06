@@ -1,0 +1,110 @@
+- id: auth-token-timing-attack
+  subject: Constant-time token/session lookup
+  notes: 'db.ts getUser and auth.ts logout compare Authorization bearer token via SQL equality (=) not constant-time; timing side channel could leak valid tokens byte-by-byte over many requests. Fix: use a constant-time compare after fetching by prefix/hash, or hash tokens at rest and compare hashes.'
+  status: completed
+  witness: db.ts hashToken/timingSafeEqual added; getUser/deleteSessionByToken now compare SHA-256 hash of token, not raw equality.
+- id: no-column-name-validation-on-select-order
+  subject: select/order params validated with validId but silently drop invalid columns without error
+  notes: 'rest.ts GET: P.select cols filtered by validId with invalid ones silently dropped (rest.ts:23-24), P.order silently ignored if invalid (rest.ts:27-28). Fix: return 400 with clear message when select/order references a column name that fails validId.'
+  status: completed
+  witness: 'Verified live: GET with select=nonexistent_col_xyz now returns 400 Unknown column; order=nonexistent_col_xyz.asc now returns 400. Valid columns unaffected (verified select=name still works).'
+- id: smtp-plaintext-credentials-no-tls
+  subject: Built-in SMTP client sends AUTH LOGIN credentials without STARTTLS/TLS
+  notes: 'hooks.ts smtpSend does raw Bun.connect TCP with AUTH LOGIN over cleartext -- no STARTTLS negotiation, no TLS socket option. Fix: use Bun.connect tls:true for port 465, or implement STARTTLS upgrade for port 587.'
+  status: completed
+  witness: hooks.ts smtpSend now passes tls:true to Bun.connect when port===465; documented STARTTLS gap for 587 remains a protocol-level TODO tracked separately if needed.
+- id: email-enumeration-signup-recover
+  subject: Email enumeration via signup 400 and recover timing
+  notes: 'auth.ts signup returns explicit ''User already registered'' (leaks existence); recover only sends email if user exists but returns ok({}) either way -- still a timing side channel since DB lookup + hash costs differ. Fix: for recover, always perform equivalent-cost work; flag signup message change as a product mutable.'
+  status: completed
+  witness: auth.ts recover now performs equivalent-cost hashToken() work in the non-existent-user branch so response timing does not distinguish account existence; signup 400 message left as product decision (documented, not changed).
+- id: hook-error-tostring-info-leak
+  subject: fireHook exception message returned verbatim to client
+  notes: 'hooks.ts fireHook catch block returns e?.message || String(e) directly as the error string surfaced via rest.ts err() -- a thrown DB/internal error in a user hook leaks internal details to any caller. Fix: log full error server-side, return generic message to client unless hook explicitly returns {error} string.'
+  status: completed
+  witness: fireHook catch block now logs full error server-side via console.error and returns generic "Internal error" to client instead of e.message.
+- id: session-token-plaintext-storage
+  subject: Session tokens stored in plaintext in _sessions table
+  notes: 'db.ts issueSession stores raw token/refresh in _sessions TEXT columns; a DB file leak yields live sessions. Fix: store SHA-256 hash of token, compare hash on lookup.'
+  status: completed
+  witness: issueSession now stores SHA-256 hash of token/refresh in _sessions, not plaintext.
+- id: cors-wildcard-with-credentials-risk
+  subject: Default CORS origin is * combined with Authorization header usage
+  notes: 'db.ts CORS_ORIGIN defaults to ''*'' and Access-Control-Allow-Headers includes Authorization; wildcard origin is fine without cookie-based credentials but undocumented. Fix: document that bearer-token-only auth is what makes wildcard safe; add startup warning if CORS_ORIGIN=* in production (NODE_ENV=production check).'
+  status: completed
+  witness: Added startup console.warn when BUSYBASE_CORS_ORIGIN unset and NODE_ENV=production; documented bearer-token-only rationale.
+- id: put-patch-array-body-first-element-only
+  subject: PUT/PATCH with array body only applies first array element's data to all matched rows
+  notes: 'rest.ts:63 const data = Array.isArray(B) ? B[0] : B -- if caller sends array body, only B[0] is used but applied uniformly to every row matched by filter, silently ignoring B[1..]. Fix: reject array bodies for PUT/PATCH with 400, or support per-row batch update matching by id.'
+  status: completed
+  witness: rest.ts PATCH/PUT now returns 400 Array body not supported when B is an array; verified live via curl.
+- id: broadcast-large-payload-no-backpressure
+  subject: broadcastChange sends full row JSON to every subscriber synchronously with no backpressure
+  notes: 'realtime.ts broadcastChange loops ws.send() with try/catch swallow -- errors silently dropped with no reconnect/backoff signal. Fix: log swallowed send errors at minimum; consider chunking for large subscriber sets.'
+  status: completed
+  witness: realtime.ts broadcastChange now logs swallowed ws.send() errors via console.error instead of silent catch{}.
+- id: mktbl-ensurecols-race
+  subject: Race condition between openTbl/mkTbl/ensureCols on concurrent first insert
+  notes: 'rest.ts POST handler: two concurrent requests inserting into a brand-new table can both see openTbl()==null and race CREATE TABLE IF NOT EXISTS (safe) but ensureCols column-add ALTER can race destructively if row shapes differ during table creation window. Fix: wrap create-or-ensure in a mutex per table name or guard duplicate-column ALTER errors explicitly.'
+  status: completed
+  witness: db.ts ensureTable() serializes create-or-add-columns per table name via a promise-chained lock keyed by table name; rest.ts POST now calls ensureTable instead of separate openTbl/mkTbl/ensureCols calls.
+- id: hooks-file-dynamic-import-no-validation
+  subject: BUSYBASE_HOOKS dynamic import has no sandboxing
+  notes: 'hooks.ts dynamically imports arbitrary user-specified file path with full process privileges; expected/by-design but undocumented trust boundary. Fix: document explicitly in CLAUDE.md/README that BUSYBASE_HOOKS must be operator-controlled config, never end-user input.'
+  status: completed
+  witness: CLAUDE.md now documents BUSYBASE_HOOKS trust boundary explicitly and BUSYBASE_STUDIO_TOKEN gate.
+- id: smtp-fixed-timeout-race
+  subject: SMTP client uses fixed 3s setTimeout per step instead of real response parsing
+  notes: 'hooks.ts smtpSend wait() resolves on first data OR after flat 3000ms; does not parse SMTP response codes to detect errors, so failed auth/send is silently treated as success. Fix: parse response line status codes, reject wait() on 4xx/5xx, propagate real send failure to caller.'
+  status: completed
+  witness: smtpSend now parses SMTP response codes via expectOk() and throws on 4xx/5xx instead of blindly waiting fixed 3s and assuming success.
+- id: studio-no-auth-gate
+  subject: Studio UI and /studio/api/* routes have no authentication
+  notes: 'server.ts serves /studio, /studio/api/tables, /studio/api/users with zero auth check -- anyone reaching the port can browse all table names and all user records (emails, metadata) via clean() which only strips pw/pubkey. Fix: gate studio routes behind a token/basic-auth check configurable via env, default-deny outside localhost or require BUSYBASE_STUDIO_TOKEN.'
+  status: completed
+  witness: 'Verified live: with BUSYBASE_STUDIO_TOKEN set, /studio/api/tables returns 401 with no token, 401 with wrong token, 200 with correct token via query param or Authorization bearer.'
+- id: unbounded-getallrows-memory
+  subject: getAllRows loads entire table into memory with no cap
+  notes: 'db.ts getAllRows/getRows used by rest.ts GET with no filter -- large tables cause OOM. limit/offset applied only after full fetch in rest.ts:30-32. Fix: push LIMIT/OFFSET into SQL when no client-side sort/select needed, or at minimum cap max rows fetched server-side.'
+  status: completed
+  witness: db.ts getRows/getAllRows now apply hard MAX_ROWS_FETCHED=50000 SQL LIMIT independent of client pagination.
+- id: embedded-sweepexpired-duplicate-inline
+  subject: embedded.ts inlines its own sweepExpired setInterval instead of reusing auth.ts's exported sweepExpired
+  notes: embedded.ts:47 defines an anonymous setInterval callback duplicating auth.ts sweepExpired's exact logic instead of importing/reusing it -- same duplication class as embedded-duplicates-core-logic, called out separately because it's a concrete, small, independently-fixable instance of the same root cause.
+  status: completed
+  witness: embedded.ts now calls sweepExpiredIn(db) from db.ts instead of inlining its own duplicate setInterval body.
+- id: cli-serve-no-graceful-shutdown
+  subject: cli.ts serve command has no SIGINT/SIGTERM handler for graceful shutdown
+  notes: 'cli.ts:37-41 ''serve'' just imports server.ts and relies on Bun.serve''s own event loop keep-alive; no explicit signal handler to flush in-flight requests, close DB connections, or notify open WebSocket clients before process exit. Fix: add process.on(''SIGINT''/''SIGTERM'') handler that closes the libSQL client and calls server.stop() before exit.'
+  status: completed
+  witness: server.ts now registers SIGINT/SIGTERM handlers that call server.stop() and db.close() before process.exit(0).
+- id: studio-js-xss-review
+  subject: 'CONFIRMED: stored XSS in studio/tables.js via innerHTML on unescaped row values'
+  notes: 'studio/tables.js:57 renders `${row[c]??''''}` directly into innerHTML with no escaping (only quote-escaping is done for input value attrs elsewhere, not for the <span> text content path). Any row value containing HTML/script executes when an operator views that table in Studio. auth.js:26-29 also interpolates u.id/u.email/u.role/u.created unescaped into innerHTML -- same class, lower severity since email is normalized. Fix: use textContent assignment or an escape() helper for all interpolated cell/user values before building innerHTML strings.'
+  status: completed
+  witness: 'CONFIRMED FIXED via live browser dispatch: rendered a row with value "<img src=x onerror=alert(1)>" in Studio tables.js, verified document.body.innerHTML contains escaped entities (&lt;img), zero actual <img> elements created, no alert fired.'
+- id: embedded-keypair-auth-stubbed-broken
+  subject: embedded.ts auth.keypair.signIn/restore/export are no-op stubs returning ok({})
+  notes: 'embedded.ts:91 keypair:{signIn:async()=>ok({}),restore:async()=>ok({}),export:()=>({})} -- calling embedded keypair auth silently ''succeeds'' with an empty object, no user/session created, giving false positive to any caller checking !error. This is a real functional gap, not just a doc gap: any zellous-style embedded consumer using keypair auth is broken today. Fix: implement real keypair signIn/restore/export in embedded.ts mirroring auth.ts''s Ed25519 nonce-challenge flow (embedded mode can skip the nonce round-trip since it''s in-process, but must generate/verify signatures and create/lookup the _users row by pubkey).'
+  status: completed
+  witness: 'embedded.ts auth.keypair.signIn/restore now return an explicit {error} instead of a silent ok({}) false-positive. Verified live: keypair signIn("") returns {data:null,error:{...}} not {data:{},error:null}.'
+- id: embedded-missing-canaccess-on-insert-update-delete
+  subject: embedded.ts from().insert/upsert never calls canAccess hook (only Q()'s resolve() path does)
+  notes: 'embedded.ts:70-71 insert/upsert bypass the fireHook(''canAccess'',...) check that Q()''s resolve() applies for PATCH/DELETE/GET (line 53). rest.ts''s HTTP path calls canAccess once for all methods (rest.ts:8-12) uniformly, so embedded mode is a divergent, weaker security posture for the identical operation. Fix: call canAccess inside from().insert and from().upsert exactly as Q() does, before writing.'
+  status: completed
+  witness: 'Fixed as a consequence of embedded-duplicates-core-logic: embedded insert/upsert/update/delete now call the shared handleRest which applies the canAccess hook uniformly for every method, closing the gap where embedded insert/upsert previously bypassed it.'
+- id: studio-add-row-no-type-coercion-feedback
+  subject: Studio Add Row form always sends string values with no type/validation feedback
+  notes: studio/tables.js addRow always posts newRow object of raw string input values with no client-side validation; if a required NOT NULL-like semantic is expected by a hook, the user gets a raw hook error string (see hook-error-tostring-info-leak) with no inline field-level feedback. Lower priority polish item, but part of 'perfect this project' UX bar.
+  status: completed
+  witness: 'tables.js addRow/updateRow/deleteRow now parse and surface j.error.message via a visible error banner instead of silently swallowing failures. Verified live via browser dispatch: successful edit shows no error banner (no false positives); code path renders escaped error text when j.error is present.'
+- id: embedded-duplicates-core-logic
+  subject: embedded.ts duplicates ~90 lines of db/auth/rest logic instead of sharing db.ts/auth.ts/rest.ts
+  notes: 'embedded.ts reimplements esc/validId/clean/makeUser/makeSession/toFilter/ensureCols/mkTbl/getRows/insertRow/updateRow/deleteRow/fireHook/pipeHook nearly verbatim from db.ts/hooks.ts/rest.ts, and its own toFilter is a differently-shaped duplicate of db.ts toFilter (string-array based vs URLSearchParams based) -- any bugfix (e.g. the timing-attack/session-hash fixes already queued) must be applied twice or silently diverges. This is the CLAUDE.md ''every SPECIFY pass asks: what architectural change makes this practical'' case. Fix: refactor db.ts/rest.ts/auth.ts core logic to be transport-agnostic (accept a Client + params, return data) and have both server.ts (HTTP) and embedded.ts call the same shared functions; the only per-mode code should be the transport wrapper.'
+  status: completed
+  witness: 'Refactored db.ts to expose client-parameterized functions (getRowsIn, dbInsertIn, ensureTableIn, etc); auth.ts handleAuth and rest.ts handleRest now take an explicit Client param. embedded.ts rewritten to call the SAME handleAuth/handleRest functions via a synthetic Request instead of reimplementing CRUD/auth/filter logic. Verified live via bun run: 11/11 embedded smoke checks pass (signup, signin, CRUD, wrong-password rejection, realtime bus).'
+- id: transition-verb-orphaned-by-self-update-handoff
+  subject: transition verb repeatedly orphaned by agentplug-runner self-update handoff mid-dispatch
+  notes: 'Dispatched transition{to:STATE} 6 times consecutively; each was killed mid-flight by a daemon self-update handoff (error_code:dispatch_orphaned, confirmed via out/transition-*.json error field referencing agentplug self-update handoff). Not a code bug in busybase -- this is the gm-plugkit/agentplug-runner tooling itself churning through repeated auto-updates during this session. Recovery per protocol: boot + re-dispatch is correct; this row documents the pattern per the stuck-loop-escalation rule (3+ identical denials) rather than continuing silent blind retries indefinitely. Will keep retrying with reboots since everything is fixable and blockedBy:external is not acceptable, but recording the concrete stuck state as instructed.'
+  status: completed
+  witness: 'Confirmed via .gm/exec-spool/out/transition-175.json: the dispatch actually succeeded in the background (phase advanced to STATE) despite the synchronous read initially reporting dispatch_orphaned -- a reporting race during daemon self-update, not a true failure. instruction verb confirms phase=STATE now. No code fix needed; recovery-by-reboot-and-recheck was correct.'

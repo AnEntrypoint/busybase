@@ -22,7 +22,8 @@ Run `bun run build` to compile `.ts` sources to `.js` artifacts in `src/`. The `
 - `BUSYBASE_DIR` — Data directory (default: `busybase_data`). SQLite file stored at `<dir>/db.sqlite`.
 - `BUSYBASE_PORT` — Server port (default: `54321`)
 - `BUSYBASE_CORS_ORIGIN` — CORS origin header (default: `*`)
-- `BUSYBASE_HOOKS` — Path to hooks file (optional)
+- `BUSYBASE_HOOKS` — Path to hooks file (optional). This file is dynamically `import()`ed with full process privileges at startup — it must be an operator-controlled path (config/deploy-time), never derived from end-user input.
+- `BUSYBASE_STUDIO_TOKEN` — When set, gates all `/studio*` routes behind a token check (`?token=` query param or `Authorization: Bearer` header). Unset by default for zero-config local use; set it before exposing Studio beyond localhost.
 - `BUSYBASE_URL` — Used in password-reset emails
 - `BUSYBASE_SMTP_HOST/PORT/USER/PASS/FROM` — SMTP config for built-in email transport
 

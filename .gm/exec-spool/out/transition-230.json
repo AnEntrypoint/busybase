@@ -1,0 +1,1 @@
+{"dispatch_id":"1785998749875-97-6a134709e09bd920","error":"transition rejected: no edge from `RES` to `RES` in the active FSM graph -- there is no legal direct path between these phases.","error_code":"failed","exitCode":1,"next_dispatch_hint":"instruction","ok":false,"request_fingerprint":"fc5dd082b14d95ad","stdout":"","verb":"transition"}

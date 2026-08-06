@@ -1,4 +1,6 @@
 import type { ServerWebSocket } from "bun";
+import { validId } from "./db.ts";
+import { fireHook, hooks } from "./hooks.ts";
 
 type WSData = { tables: Set<string> };
 
@@ -19,17 +21,28 @@ export const broadcastChange = (table: string, eventType: "INSERT" | "UPDATE" | 
   const subs = registry.get(table);
   if (!subs?.size) return;
   const msg = JSON.stringify({ event: eventType, table, eventType, new: newRow ?? null, old: oldRow ?? null });
-  for (const ws of subs) { try { ws.send(msg); } catch {} }
+  for (const ws of subs) {
+    try { ws.send(msg); }
+    catch (e) { console.error(`[BusyBase] Realtime send failed for table "${table}":`, e); }
+  }
 };
 
 export const wsHandlers = {
   open(ws: ServerWebSocket<WSData>) { ws.data = { tables: new Set() }; },
   message(ws: ServerWebSocket<WSData>, raw: string | Buffer) {
-    try {
-      const msg = JSON.parse(typeof raw === "string" ? raw : raw.toString());
-      if (msg.type === "subscribe" && msg.table) sub(ws, msg.table);
-      else if (msg.type === "unsubscribe" && msg.table) unsub(ws, msg.table);
-    } catch {}
+    (async () => {
+      try {
+        const msg = JSON.parse(typeof raw === "string" ? raw : raw.toString());
+        if (msg.type === "subscribe" && msg.table) {
+          if (!validId(msg.table)) return;
+          if (hooks.canAccess) {
+            const denied = await fireHook("canAccess", { user: null, table: msg.table, method: "GET" });
+            if (denied) return;
+          }
+          sub(ws, msg.table);
+        } else if (msg.type === "unsubscribe" && msg.table) unsub(ws, msg.table);
+      } catch {}
+    })();
   },
   close(ws: ServerWebSocket<WSData>) {
     for (const table of ws.data?.tables ?? []) registry.get(table)?.delete(ws);

@@ -1,16 +1,28 @@
 import { hooks } from "./hooks.ts";
 import { wsHandlers } from "./realtime.ts";
-import { cors, err, tableNames, getAllRows, clean } from "./db.ts";
-import { initAuthTables, sweepExpired, handleAuth } from "./auth.ts";
-import { handleRest } from "./rest.ts";
+import { cors, err, tableNames, getAllRows, clean, db } from "./db.ts";
+import { initAuthTables, sweepExpired, handleAuthDefault } from "./auth.ts";
+import { handleRestDefault } from "./rest.ts";
 
 const PORT = process.env.BUSYBASE_PORT || 54321;
+const STUDIO_TOKEN = process.env.BUSYBASE_STUDIO_TOKEN;
+
+if (!process.env.BUSYBASE_CORS_ORIGIN && process.env.NODE_ENV === "production") {
+  console.warn("[BusyBase] BUSYBASE_CORS_ORIGIN is not set (defaulting to \"*\"). This is safe only because auth uses bearer tokens, not cookies. Set BUSYBASE_CORS_ORIGIN explicitly in production.");
+}
 
 await initAuthTables();
-setInterval(sweepExpired, 5 * 60_000).unref();
+setInterval(() => sweepExpired(), 5 * 60_000).unref();
 
 const mime: Record<string, string> = { ".js": "text/javascript", ".html": "text/html", ".css": "text/css" };
 const ext = (p: string) => p.slice(p.lastIndexOf(".")) || "";
+
+const studioAuthorized = (req: Request, searchParams: URLSearchParams): boolean => {
+  if (!STUDIO_TOKEN) return true;
+  const bearer = req.headers.get("Authorization")?.split(" ")[1];
+  const qtoken = searchParams.get("token");
+  return bearer === STUDIO_TOKEN || qtoken === STUDIO_TOKEN;
+};
 
 const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req) => {
   if (req.headers.get("upgrade") === "websocket" && new URL(req.url).pathname === "/realtime/v1/websocket") {
@@ -28,14 +40,19 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
 
   if (pathname.startsWith("/auth/v1/")) {
     const action = pathname.split("/")[3];
-    const result = await handleAuth(action, req, B);
+    const ip = server.requestIP(req)?.address || "unknown";
+    const result = await handleAuthDefault(action, req, B, ip);
     return result ?? err("Not found", 404);
   }
 
   if (pathname.startsWith("/rest/v1/")) {
     const table = pathname.slice(9).split("/").map(decodeURIComponent).filter(Boolean)[0];
     if (!table) return err("Table required");
-    return handleRest(table, req, P, B);
+    return handleRestDefault(table, req, P, B);
+  }
+
+  if (pathname === "/studio" || pathname === "/studio/" || pathname.startsWith("/studio/")) {
+    if (!studioAuthorized(req, searchParams)) return err("Studio access requires a valid token", 401);
   }
 
   if (pathname === "/studio/config") {
@@ -79,3 +96,15 @@ const server = Bun.serve({ port: PORT, websocket: wsHandlers, fetch: async (req)
 }});
 
 console.log(`BusyBase: http://localhost:${PORT}  |  Studio: http://localhost:${PORT}/studio`);
+
+let shuttingDown = false;
+const shutdown = (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[BusyBase] Received ${signal}, shutting down gracefully...`);
+  server.stop();
+  db.close();
+  process.exit(0);
+};
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));

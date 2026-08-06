@@ -1,12 +1,15 @@
+import type { Client } from "@libsql/client";
 import { fireHook, pipeHook, hooks } from "./hooks.ts";
 import { broadcastChange } from "./realtime.ts";
-import { validId, openTbl, mkTbl, ensureCols, dbInsert, dbUpdate, dbDelete, getRows, getAllRows, clean, toFilter, getUser, ok, err, cors } from "./db.ts";
+import { validId, openTblIn, ensureTableIn, dbInsertIn, dbUpdateIn, dbDeleteIn, getRowsIn, getAllRowsIn, clean, toFilter, getUserFromRequestIn, ok, err, cors, db as defaultDb } from "./db.ts";
 
-export const handleRest = async (table: string, req: Request, P: Record<string, string>, B: any): Promise<Response> => {
+export type BroadcastFn = (table: string, eventType: "INSERT" | "UPDATE" | "DELETE", newRow: any, oldRow: any) => void;
+
+export const handleRest = async (client: Client, table: string, req: Request, P: Record<string, string>, B: any, broadcast: BroadcastFn = broadcastChange): Promise<Response> => {
   if (!validId(table)) return err("Invalid table name");
 
   if (hooks.canAccess) {
-    const reqUser = await getUser(req).catch(() => null);
+    const reqUser = await getUserFromRequestIn(client, req).catch(() => null);
     const denied = await fireHook("canAccess", { user: reqUser, table, method: req.method });
     if (denied) return err(denied, 403);
   }
@@ -17,15 +20,22 @@ export const handleRest = async (table: string, req: Request, P: Record<string, 
   if (req.method === "GET") {
     const paramsHooked = await pipeHook("beforeSelect", P, table);
     const filter = toFilter(paramsHooked);
-    let rows = filter ? await getRows(table, filter) : await getAllRows(table);
+    let rows = filter ? await getRowsIn(client, table, filter) : await getAllRowsIn(client, table);
     rows = await pipeHook("afterSelect", rows, table);
+    const knownCols = rows.length ? new Set(Object.keys(rows[0])) : null;
     if (P.select && P.select !== "*") {
-      const cols = P.select.split(",").filter(c => validId(c));
-      rows = rows.map((r: any) => Object.fromEntries(cols.map(c => [c, r[c]])));
+      const requested = P.select.split(",");
+      const invalidSyntax = requested.filter(c => !validId(c));
+      if (invalidSyntax.length) return err(`Invalid column name in select: ${invalidSyntax.join(", ")}`);
+      const unknown = knownCols ? requested.filter(c => !knownCols.has(c)) : [];
+      if (unknown.length) return err(`Unknown column in select: ${unknown.join(", ")}`);
+      rows = rows.map((r: any) => Object.fromEntries(requested.map(c => [c, r[c]])));
     }
     if (P.order) {
       const [col, dir] = P.order.split(".");
-      if (validId(col)) rows.sort((a: any, b: any) => dir === "desc" ? (b[col] > a[col] ? 1 : -1) : (a[col] > b[col] ? 1 : -1));
+      if (!validId(col)) return err(`Invalid column name in order: ${col}`);
+      if (knownCols && !knownCols.has(col)) return err(`Unknown column in order: ${col}`);
+      rows.sort((a: any, b: any) => dir === "desc" ? (b[col] > a[col] ? 1 : -1) : (a[col] > b[col] ? 1 : -1));
     }
     const limit = Math.max(0, parseInt(P.limit) || 1000);
     const offset = Math.max(0, parseInt(P.offset) || 0);
@@ -47,11 +57,9 @@ export const handleRest = async (table: string, req: Request, P: Record<string, 
     const preErr = await fireHook("beforeInsert", table, rows);
     if (preErr) return err(preErr, 400);
     rows = await pipeHook("afterInsert", rows.map((r: any) => ({ id: r.id ?? crypto.randomUUID(), ...r })), table);
-    const tExists = await openTbl(table);
-    if (!tExists) await mkTbl(table, rows[0]);
-    else await ensureCols(table, rows[0]);
-    for (const row of rows) await dbInsert(table, row);
-    for (const row of clean(rows)) broadcastChange(table, "INSERT", row, null);
+    await ensureTableIn(client, table, rows[0]);
+    for (const row of rows) await dbInsertIn(client, table, row);
+    for (const row of clean(rows)) broadcast(table, "INSERT", row, null);
     if (returnMinimal) return new Response(null, { status: 204, headers: cors });
     return ok(clean(rows), 201);
   }
@@ -59,16 +67,17 @@ export const handleRest = async (table: string, req: Request, P: Record<string, 
   if (req.method === "PUT" || req.method === "PATCH") {
     const filter = toFilter(P);
     if (!filter) return err("No filter provided");
-    if (!(await openTbl(table))) return err("Table not found", 404);
-    const data = Array.isArray(B) ? B[0] : B;
-    let existing = await getRows(table, filter);
+    if (!(await openTblIn(client, table))) return err("Table not found", 404);
+    if (Array.isArray(B)) return err("Array body not supported for PUT/PATCH; update rows individually or by id");
+    const data = B;
+    let existing = await getRowsIn(client, table, filter);
     if (!existing.length) return ok([]);
     const preErr = await fireHook("beforeUpdate", table, existing, data);
     if (preErr) return err(preErr, 400);
-    await dbUpdate(table, data, filter);
+    await dbUpdateIn(client, table, data, filter);
     let updated = existing.map((r: any) => ({ ...r, ...data }));
     updated = await pipeHook("afterUpdate", updated, table);
-    for (let i = 0; i < updated.length; i++) broadcastChange(table, "UPDATE", clean([updated[i]])[0], clean([existing[i]])[0]);
+    for (let i = 0; i < updated.length; i++) broadcast(table, "UPDATE", clean([updated[i]])[0], clean([existing[i]])[0]);
     if (returnMinimal) return new Response(null, { status: 204, headers: cors });
     return ok(clean(updated));
   }
@@ -76,16 +85,20 @@ export const handleRest = async (table: string, req: Request, P: Record<string, 
   if (req.method === "DELETE") {
     const filter = toFilter(P);
     if (!filter) return err("No filter provided");
-    if (!(await openTbl(table))) return err("Table not found", 404);
-    const toDelete = await getRows(table, filter);
+    if (!(await openTblIn(client, table))) return err("Table not found", 404);
+    const toDelete = await getRowsIn(client, table, filter);
     const preErr = await fireHook("beforeDelete", table, toDelete);
     if (preErr) return err(preErr, 400);
-    await dbDelete(table, filter);
+    await dbDeleteIn(client, table, filter);
     await fireHook("afterDelete", table, toDelete);
-    for (const row of clean(toDelete)) broadcastChange(table, "DELETE", null, row);
+    for (const row of clean(toDelete)) broadcast(table, "DELETE", null, row);
     if (returnMinimal) return new Response(null, { status: 204, headers: cors });
     return ok([]);
   }
 
   return err("Method not allowed", 405);
 };
+
+// Convenience wrapper for the HTTP server, bound to the module-level singleton client.
+export const handleRestDefault = (table: string, req: Request, P: Record<string, string>, B: any) =>
+  handleRest(defaultDb, table, req, P, B);
