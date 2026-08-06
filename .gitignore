@@ -5,6 +5,15 @@
 .gm/rs-learn.db
 .gm/code-search/
 .gm/last-dispatch-ts
+.gm/last-instruction-ts
+.gm/last-prompt.txt
+.gm/long-gap-retry-state
+.gm/next-step.md
+.gm/turn-state.json
+.gm/browser-chrome-profile-default/
+.gm/config-source-cache-default
+.gm/config-source-cache-default.*.sync.json
+.gm/.embed-generation.*
 .agentplug-kv/
 *.db
 *.db-shm
