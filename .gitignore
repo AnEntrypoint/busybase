@@ -1,5 +1,11 @@
 .gm-stop-verified
 .code-search/
+.gm/exec-spool/
+.gm/witness/
+.gm/rs-learn.db
+.gm/code-search/
+.gm/last-dispatch-ts
+.agentplug-kv/
 *.db
 *.db-shm
 *.db-wal
