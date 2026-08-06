@@ -223,3 +223,8 @@
   subject: 'restRateLimiter in rest.ts (added for rest-crud-no-rate-limit) had no periodic sweep -- discovered during STATE phase ownership sweep: authRateLimiter is swept via sweepExpired() every 5min but restRateLimiter buckets grow unbounded per distinct IP with no cleanup, a real long-running-server memory leak'
   status: completed
   witness: 'Exported restRateLimiter from rest.ts, wired restRateLimiter.sweep() into server.ts setInterval alongside sweepExpired(). Live-witnessed: server starts clean, 5 rapid mutating requests succeed (201x5), full CLI test suite 76 passed 0 failed with the sweep interval active'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: ci-publish-workflow-stale-vectordb-external
+  subject: .github/workflows/publish.yml build steps pass --external vectordb (5 occurrences) instead of --external @libsql/client -- stale from the same LanceDB-to-libSQL migration this session already fixed everywhere else; package.json build script correctly uses @libsql/client but CI diverges, meaning a real npm publish would bundle libsql (breaking native bindings) instead of leaving it external
+  status: completed
+  witness: 'Changed all 5 --external vectordb occurrences in .github/workflows/publish.yml to --external @libsql/client, matching package.json build script exactly. Verified live: ran all 5 corrected bun build commands locally, all succeed'
