@@ -1,0 +1,99 @@
+## 🎯 busybase v1.0.0 — HTTP SQLite database that feels like Supabase — drop-in headless backend powered by Bun
+
+**Runtime:** bun (bun)
+
+## 🚀 Quick Start
+
+`bun run src/cli.ts serve` | `bun build src/server.ts --target=bun --outfile=src/server.js --external @libsql/client && bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js && bun build src/cli.ts --target=bun --outfile=src/cli.js --external @libsql/client && bun build src/embedded.ts --target=bun --outfile=src/embedded.js --external @libsql/client && bun build src/hooks.ts --target=bun --outfile=src/hooks.js --external @libsql/client && bun build src/realtime.ts --target=bun --outfile=src/realtime.js --external @libsql/client` | `bun run src/cli.ts test`
+
+# 35f 9.7kL 137fn 3cls cx2.6
+*Legend: f=files L=lines fn=functions cls=classes cx=avg-complexity | file:line:name(NL)=location Np=params | ↑N=imports-from ↓N=imported-by (N)=occurrences (+N)=more | 🔄circular 🏝️isolated 🔥complex 📋duplicated 📁large*
+
+**Langs:** TS:66% HTML:29% JS:3% JSON:0%
+
+## 🛠️ Tech Stack
+
+**Patterns:** assert(552), check(95), fetch(83), client.from(70), api(58), err(57)
+**Top IDs:** assert(565), data(512), error(298), name(284), table(255), res(250)
+
+## ⚡ Code Patterns
+
+**Async:** async(362), await(1000), Promise(13)
+**Errors:** try/catch(56), throw(10)
+**Internal calls:** assert(552), check(95), fetch(83), client.from(70), api(58), err(57), bb.from(52), uid(50)
+
+## 🔗 I/O & Integration
+
+**Env vars:** BUSYBASE_CORS_ORIGIN, BUSYBASE_DIR, BUSYBASE_HOOKS, BUSYBASE_KEY, BUSYBASE_PORT, BUSYBASE_SMTP_FROM, BUSYBASE_SMTP_HOST, BUSYBASE_SMTP_PASS, BUSYBASE_SMTP_PORT, BUSYBASE_SMTP_USER, BUSYBASE_URL, RESEND_API_KEY
+**HTTP:** fetch(83)
+**Storage:** SQL(144), files(18), JSON(106)
+**Events:** emit(2), listen(27)
+
+## 📊 Code Organization
+
+**Large files:** docs/docs.html:2182L, tests/hooks.ts:618L, tests/edge-coverage.ts:561L, tests/deep-coverage.ts:458L, tests/remaining-coverage.ts:426L, tests/auth-edge-cases.ts:415L (+11)
+**Long funcs:** tests/deep-coverage.ts:46:run(408L), tests/rest-edge-cases.ts:96:runTests(198L), tests/server-routes.ts:34:run(186L), tests/cli-commands.ts:59:run(114L), studio/realtime.js:1:render(71L), studio/auth.js:1:render(71L) (+8)
+**Many params:** tests/deep-coverage.ts:46:run(26p), tests/server-routes.ts:34:run(12p), tests/edge-coverage.ts:166:testConcurrentOperations(11p), tests/hooks.ts:527:testMultipleHooks(11p), studio/realtime.js:1:render(10p), studio/tables.js:37:render(8p)
+**Classes:** src/hooks.ts:0:HookUser, src/hooks.ts:0:Hooks, src/embedded.ts:0:EmbeddedConfig
+
+## 🔄 Architecture
+
+**L0 [pure exports]:** hooks(5↓), db(4↓), realtime(3↓), sdk(1↓)
+**L3 [pure imports]:** cli(7↑), embedded(1↑)
+**Hubs:** cli(7↑0↓), server(5↑1↓), hooks(0↑5↓), rest(3↑2↓)
+**External:** bun, , @libsql/client
+
+## 🔌 API Surface
+
+**Classes:** HookUser, Hooks, EmbeddedConfig
+**Entry files:** db, realtime, hooks, sdk
+
+## 🚨 Issues
+
+- 🔥 Complex funcs: deep-coverage.ts:46:run(408L), rest-edge-cases.ts:96:runTests(198L), server-routes.ts:34:run(186L), cli-commands.ts:59:run(114L)
+- 📁 Large files: docs/docs.html:2182L, tests/edge-coverage.ts:561L, tests/hooks.ts:618L
+- 📋 9 duplicated groups
+- 🔐 hardcoded secrets in auth.js:56, auth.ts:119, auth.ts:153, embedded.ts:43, embedded.ts:81, embedded.ts:82 (+5)
+- 🔐 SQL injection in db.ts:52, db.ts:57, db.ts:63, db.ts:72, db.ts:76, embedded.ts:29 (+14)
+
+## 🧹 Dead Code & Tests
+
+**Orphaned:** tables.js, _test-hooks.ts, package.json, missing-hooks.ts, sdk-edge-cases.ts, server-routes.ts (+18)
+**Tests:** 0/37 (0%)
+
+## 📦 Modules
+
+- src: 10f, 36cx, 18↑18↓
+- tests: 16f, 0cx, 0↑0↓
+- docs: 2f, 0cx, 0↑0↓
+- studio: 6f, 0cx, 0↑0↓
+
+## 📄 File Index
+
+**docs/docs.html** 2182L
+**docs/index.html** 210L
+**package.json** 43L
+**src/auth.ts** 161L
+**src/cli.ts** 371L
+**src/db.ts** 165L
+**src/embedded.ts** 106L
+**src/gui.html** 398L
+**src/hooks.ts** 125L fn: open, data, error, close
+**src/realtime.ts** 37L fn: open, message, close
+**src/rest.ts** 92L
+**src/sdk.ts** 264L exports: [BB]
+**src/server.ts** 81L
+**studio/auth.js** 71L fn: render
+**studio/index.html** 81L
+**studio/realtime.js** 71L fn: render
+**studio/settings.js** 62L fn: render
+**studio/sql.js** 71L fn: render
+**studio/tables.js** 95L fn: fetchTables, fetchRows, deleteRow, addRow (+2)
+**tests/_test-hooks.ts** 9L
+*+15 more files*
+
+Git: branch: master, 1 uncommitted
+Hot: server.ts(12), package.json(9), sdk.ts(8), sdk.js(5), README.md(5), index.html(4)
+Tooling: GitHub Actions (auto-declaudeify.yml, publish.yml, release.yml)
+Conv[JS]: 4-space, single quotes, arrow functions, named exports
+Conv[TS]: 2-space, double quotes, semicolons, arrow functions, named exports, relative imports, kebab-case files

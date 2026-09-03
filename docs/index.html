@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BusyBase — Zero-Config Supabase Alternative</title>
+<meta name="description" content="Minimal self-hosted backend built on Bun + libSQL (SQLite). Drop-in Supabase JS v2 API, keypair auth. No Docker, no Postgres.">
+<style>
+:root{--bg:#0a0a0f;--bg2:#11111a;--border:#2a2a40;--acc:#7c6af7;--acc2:#a78bfa;--green:#34d399;--text:#e2e8f0;--muted:#8892a4;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}html{scroll-behavior:smooth}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
+nav{position:fixed;top:0;left:0;right:0;z-index:99;background:rgba(10,10,15,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 2rem;height:56px;display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:var(--mono);font-size:1rem;font-weight:700;color:var(--acc2);text-decoration:none}
+.nav-links{display:flex;gap:1.5rem;list-style:none}.nav-links a{color:var(--muted);text-decoration:none;font-size:.875rem;transition:color .2s}.nav-links a:hover{color:var(--text)}
+.cta-btn{background:var(--acc);color:#fff!important;padding:.35rem 1rem;border-radius:6px;font-weight:600!important}
+.hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:6rem 2rem 4rem;background:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(124,106,247,.15),transparent)}
+h1{font-size:clamp(2.2rem,5vw,4rem);font-weight:800;letter-spacing:-.03em;line-height:1.1;margin-bottom:1.2rem;background:linear-gradient(135deg,#fff 30%,var(--acc2) 65%,#38bdf8 90%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.sub{color:var(--muted);font-size:clamp(.95rem,1.8vw,1.2rem);max-width:580px;margin-bottom:2rem}.sub strong{color:var(--text)}
+.cmd{font-family:var(--mono);background:var(--bg2);border:1px solid var(--border);color:var(--acc2);padding:.7rem 1.5rem;border-radius:8px;font-size:.95rem;margin-bottom:2rem;display:inline-block}
+.btns{display:flex;gap:.75rem;flex-wrap:wrap;justify-content:center}
+.btn{display:inline-flex;align-items:center;gap:.4rem;padding:.7rem 1.5rem;border-radius:7px;font-size:.9rem;font-weight:600;text-decoration:none;transition:all .2s;border:1px solid var(--border)}
+.btn-p{background:var(--acc);color:#fff;border-color:var(--acc);box-shadow:0 0 24px rgba(124,106,247,.3)}.btn-p:hover{box-shadow:0 0 40px rgba(124,106,247,.5)}
+.btn-s{background:var(--bg2);color:var(--text)}.btn-s:hover{border-color:var(--acc);color:var(--acc2)}
+hr{border:none;border-top:1px solid var(--border)}
+section{padding:5rem 2rem;max-width:1100px;margin:0 auto}
+.label{font-family:var(--mono);font-size:.72rem;font-weight:700;color:var(--acc);text-transform:uppercase;letter-spacing:.1em;margin-bottom:.6rem}
+h2{font-size:clamp(1.6rem,3vw,2.4rem);font-weight:800;margin-bottom:.75rem}
+.desc{color:var(--muted);max-width:520px;margin-bottom:2.5rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1.25rem}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:1.5rem;transition:all .25s}
+.card:hover{border-color:rgba(124,106,247,.4);transform:translateY(-2px);box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.card-icon{font-size:1.8rem;margin-bottom:.75rem}.card-title{font-weight:700;margin-bottom:.4rem}.card-desc{font-size:.875rem;color:var(--muted)}
+.tag{display:inline-block;margin-top:.6rem;font-family:var(--mono);font-size:.68rem;color:var(--acc);background:rgba(124,106,247,.1);border:1px solid rgba(124,106,247,.2);padding:.15rem .5rem;border-radius:4px}
+.tbl-wrap{overflow-x:auto;border-radius:10px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:.875rem}
+th{background:var(--bg2);padding:.875rem 1.1rem;text-align:left;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--border)}
+th:first-child{color:var(--text)}
+td{padding:.8rem 1.1rem;border-bottom:1px solid rgba(42,42,64,.5)}
+td:not(:first-child){text-align:center}tr:hover td{background:rgba(124,106,247,.025)}
+.ok{color:var(--green)}.no{color:#f38ba8}.half{color:#f9e2af}
+pre{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:1.5rem;font-family:var(--mono);font-size:.82rem;line-height:1.7;color:#cdd6f4;overflow-x:auto}
+.cta{text-align:center;padding:5rem 2rem;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:linear-gradient(180deg,transparent,rgba(124,106,247,.04),transparent)}
+footer{padding:2.5rem 2rem;max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem}
+.fl{font-family:var(--mono);color:var(--muted);font-size:.9rem}
+.footer-links{display:flex;gap:1.25rem;list-style:none;flex-wrap:wrap}
+.footer-links a{color:var(--muted);text-decoration:none;font-size:.85rem}.footer-links a:hover{color:var(--text)}
+@media(max-width:680px){.nav-links{display:none}.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+  <a href="index.html" class="logo">BusyBase</a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li><li><a href="#quickstart">Quick Start</a></li>
+    <li><a href="#auth">Auth</a></li><li><a href="#realtime">Realtime</a></li>
+    <li><a href="#compare">Compare</a></li><li><a href="docs.html">Docs</a></li>
+    <li><a href="https://github.com/AnEntrypoint/busybase" target="_blank" class="cta-btn">GitHub</a></li>
+  </ul>
+</nav>
+<div class="hero">
+  <h1>BusyBase<br>Zero-Config Backend</h1>
+  <p class="sub">A <strong>minimal, self-hosted backend</strong> built on Bun + libSQL (SQLite). Drop-in Supabase JS v2 API, Ed25519 keypair auth — no Docker, no Postgres.</p>
+  <div class="cmd">npx busybase serve</div>
+  <div class="btns">
+    <a href="#quickstart" class="btn btn-p">Get Started</a>
+    <a href="docs.html" class="btn btn-s">Documentation</a>
+    <a href="https://github.com/AnEntrypoint/busybase" class="btn btn-s" target="_blank">GitHub</a>
+  </div>
+</div>
+<hr><section id="features">
+  <div class="label">Why BusyBase</div>
+  <h2>Everything you need. Nothing you don't.</h2>
+  <p class="desc">Supabase ergonomics without Postgres, Docker, and microservices.</p>
+  <div class="grid">
+    <div class="card"><div class="card-icon">&#9889;</div><div class="card-title">Bun-native</div><div class="card-desc">Sub-millisecond startup, native TypeScript, no transpile step.</div><span class="tag">bun serve</span></div>
+    <div class="card"><div class="card-icon">&#128268;</div><div class="card-title">Drop-in Supabase SDK</div><div class="card-desc">Same .from().select().eq() API. One-line URL change to migrate.</div><span class="tag">Supabase JS v2</span></div>
+    <div class="card"><div class="card-icon">&#128273;</div><div class="card-title">Keypair Auth</div><div class="card-desc">Anonymous-first Ed25519 WebCrypto auth. No passwords needed.</div><span class="tag">WebCrypto</span></div>
+    <div class="card"><div class="card-icon">&#128195;</div><div class="card-title">SQL-Native Storage</div><div class="card-desc">Full SQLite power — complex queries, transactions, zero external process.</div><span class="tag">libSQL &middot; SQLite</span></div>
+    <div class="card"><div class="card-icon">&#128295;</div><div class="card-title">Studio UI</div><div class="card-desc">Built-in browser UI at /studio — browse tables, manage users, watch realtime events.</div><span class="tag">/studio</span></div>
+    <div class="card"><div class="card-icon">&#128193;</div><div class="card-title">File-Based Storage</div><div class="card-desc">libSQL stores data as a single SQLite file. Back up with cp -r. No migrations.</div><span class="tag">SQLite &middot; libSQL</span></div>
+    <div class="card"><div class="card-icon">&#9889;</div><div class="card-title">Realtime Events</div><div class="card-desc">WebSocket subscriptions for INSERT, UPDATE, DELETE. Supabase-compatible channel API.</div><span class="tag">WebSocket</span></div>
+    <div class="card"><div class="card-icon">&#128230;</div><div class="card-title">Embedded Mode</div><div class="card-desc">Run in-process with no HTTP server. Same API for CLI tools, desktop apps, serverless.</div><span class="tag">busybase/embedded</span></div>
+  </div>
+</section>
+<hr><section id="quickstart">
+  <div class="label">Quick Start</div>
+  <h2>From zero to running in under 60 seconds.</h2>
+  <p class="desc">No config files. No database setup. No Docker.</p>
+  <pre># 1. Start the server
+npx busybase serve
+
+# 2. Install the SDK
+bun add busybase
+
+# 3. Connect and query
+import BB from 'busybase';
+const db = BB('http://localhost:54321', 'local');
+
+const { data } = await db.from('todos').insert({ title: 'Buy milk', done: false });
+const { data: todos } = await db.from('todos').select('*').eq('done', false);
+await db.from('todos').update({ done: true }).eq('title', 'Buy milk');
+
+# 4. Open Studio UI
+open http://localhost:54321/studio</pre>
+</section>
+<hr><section id="auth">
+  <div class="label">Authentication</div>
+  <h2>Two auth modes. Zero friction.</h2>
+  <p class="desc">Start with anonymous keypair auth, upgrade to email/password when ready.</p>
+  <div class="grid" style="grid-template-columns:1fr 1fr">
+    <div>
+      <pre style="margin-bottom:1rem">// Keypair auth (anonymous-first)
+const db = BB('http://localhost:54321', 'local');
+
+// Auto-generates Ed25519 keypair
+await db.auth.signIn();
+
+// Same key = same user, every time
+// Export keys for backup
+const keys = db.auth.keypair.export();
+
+// Restore on another device
+await db.auth.keypair.restore(
+  keys.privkey, keys.pubkey
+);</pre>
+    </div>
+    <div>
+      <pre>// Email/password auth
+await db.auth.signUp({
+  email: 'user@example.com',
+  password: 'secure123',
+  options: { data: { name: 'Alice' } }
+});
+
+await db.auth.signInWithPassword({
+  email: 'user@example.com',
+  password: 'secure123'
+});
+
+const { data } = await db.auth.getUser();
+await db.auth.signOut();</pre>
+    </div>
+  </div>
+</section>
+<hr><section id="realtime">
+  <div class="label">Realtime</div>
+  <h2>Live updates over WebSocket.</h2>
+  <p class="desc">Subscribe to INSERT, UPDATE, and DELETE events. Supabase-compatible channel API.</p>
+  <pre>// Subscribe to changes on a table
+const channel = db.channel('my-channel')
+  .on('postgres_changes',
+    { event: '*', schema: 'public', table: 'todos' },
+    (payload) => {
+      console.log(payload.eventType); // INSERT | UPDATE | DELETE
+      console.log(payload.new);       // new row data
+      console.log(payload.old);       // previous row data
+    })
+  .subscribe((status) => console.log(status)); // "SUBSCRIBED"
+
+// Cleanup
+channel.unsubscribe();
+db.removeAllChannels();</pre>
+</section>
+<hr><section id="embedded">
+  <div class="label">Embedded Mode</div>
+  <h2>No server needed.</h2>
+  <p class="desc">Run BusyBase in-process for CLI tools, desktop apps, or serverless functions.</p>
+  <pre>import { createEmbedded } from 'busybase/embedded';
+
+const db = await createEmbedded({ dir: './my-data' });
+
+// Same API — no HTTP, no ports, no network
+await db.from('todos').insert({ title: 'Local task' });
+const { data } = await db.from('todos').select('*');
+await db.auth.signUp({ email: 'a@b.com', password: 'pass' });</pre>
+</section>
+<hr><section id="compare">
+  <div class="label">Comparison</div>
+  <h2>How does BusyBase stack up?</h2>
+  <p class="desc">Same API, far less operational complexity.</p>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>Feature</th><th>BusyBase</th><th>Supabase (self-hosted)</th><th>PocketBase</th></tr></thead>
+    <tbody>
+      <tr><td>Supabase JS v2 API</td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td></tr>
+      <tr><td>Single binary deploy</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="ok">&#10003;</span></td></tr>
+      <tr><td>No Docker required</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="ok">&#10003;</span></td></tr>
+      <tr><td>Ed25519 keypair auth</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="no">&#10007;</span></td></tr>
+      <tr><td>File-based storage</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="ok">&#10003;</span></td></tr>
+      <tr><td>Built-in Studio UI</td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td></tr>
+      <tr><td>Zero config startup</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="ok">&#10003;</span></td></tr>
+      <tr><td>Realtime (WebSocket)</td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td><td><span class="ok">&#10003;</span></td></tr>
+      <tr><td>Embedded (in-process) mode</td><td><span class="ok">&#10003;</span></td><td><span class="no">&#10007;</span></td><td><span class="no">&#10007;</span></td></tr>
+      <tr><td>Hooks / middleware</td><td><span class="ok">&#10003;</span></td><td><span class="half">~ (RLS)</span></td><td><span class="ok">&#10003;</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+<div class="cta">
+  <div class="label" style="text-align:center">Open Source &middot; MIT License</div>
+  <h2 style="margin-bottom:.75rem">Ready to build?</h2>
+  <p style="color:var(--muted);margin-bottom:2rem">Free, open source, self-hostable forever. Your data stays yours.</p>
+  <div class="btns"><a href="#quickstart" class="btn btn-p">Get Started</a><a href="docs.html" class="btn btn-s">Read the Docs</a><a href="https://github.com/AnEntrypoint/busybase" class="btn btn-s" target="_blank">GitHub</a></div>
+</div>
+<footer>
+  <div class="fl">BusyBase</div>
+  <ul class="footer-links">
+    <li><a href="docs.html">Docs</a></li><li><a href="docs.html#api">REST API</a></li>
+    <li><a href="docs.html#sdk">SDK</a></li><li><a href="https://github.com/AnEntrypoint/busybase" target="_blank">GitHub</a></li>
+  </ul>
+</footer>
+</body>
+</html>

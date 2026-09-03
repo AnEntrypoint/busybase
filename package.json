@@ -1,0 +1,49 @@
+{
+  "name": "busybase",
+  "version": "1.0.13",
+  "type": "module",
+  "description": "HTTP SQLite database that feels like Supabase — drop-in headless backend powered by Bun",
+  "main": "./src/sdk.js",
+  "module": "./src/sdk.js",
+  "exports": {
+    ".": "./src/sdk.js",
+    "./embedded": "./src/embedded.js",
+    "./server": "./src/server.js"
+  },
+  "bin": {
+    "busybase": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "bun run src/cli.ts serve",
+    "test": "bun run src/cli.ts test",
+    "build:ci": "bun build src/server.ts --target=bun --outfile=src/server.js --external @libsql/client && bun build src/sdk.ts --target=browser --format=esm --outfile=src/sdk.js && bun build src/cli.ts --target=bun --outfile=src/cli.js --external @libsql/client && bun build src/embedded.ts --target=bun --outfile=src/embedded.js --external @libsql/client --external libsql-plugkit-client && bun build src/hooks.ts --target=bun --outfile=src/hooks.js --external @libsql/client && bun build src/realtime.ts --target=bun --outfile=src/realtime.js --external @libsql/client"
+  },
+  "files": [
+    "src/server.js",
+    "src/sdk.js",
+    "src/cli.js",
+    "src/embedded.js",
+    "src/hooks.js",
+    "src/realtime.js",
+    "studio/"
+  ],
+  "dependencies": {
+    "@libsql/client": "^0.17.2",
+    "libsql-plugkit-client": "github:AnEntrypoint/libsql-plugkit-client"
+  },
+  "keywords": [
+    "database",
+    "sqlite",
+    "supabase",
+    "rest",
+    "api",
+    "bun",
+    "backend"
+  ],
+  "author": "AnEntrypoint",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AnEntrypoint/busybase.git"
+  }
+}
