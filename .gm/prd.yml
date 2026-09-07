@@ -353,3 +353,21 @@
   subject: rest.ts knownCols is null on empty result sets, letting bogus select/order columns silently pass
   status: completed
   witness: 'Added getTableColumnsIn via PRAGMA table_info, wired into rest.ts GET when knownCols is null but select/order need validation. Live-witnessed via curl: bogus columns rejected with 400 on empty result sets too. Added 5 CLI test suite checks, 82 total passing'
+- session_id: busybase-gmpull-1
+  id: readme-missing-env-vars
+  subject: README.md Configuration table missing BUSYBASE_CORS_ORIGIN and BUSYBASE_STUDIO_TOKEN
+  notes: Both vars are real (src/db.ts, src/server.ts) and documented in CLAUDE.md but absent from README's env var table -- doc drift.
+  status: completed
+  witness: Added both rows to README.md Configuration table.
+- session_id: busybase-gmpull-1
+  id: stale-master-branch-refs
+  subject: README.md, docs/docs.html, .github/workflows/release.yml referenced master branch after main/master consolidation
+  notes: Repo default branch is now main (master deleted). release.yml build trigger branches:[master] was a real functional bug -- CI would never fire again on push to main.
+  status: completed
+  witness: 'Fixed all three: README.md prose, docs/docs.html prose, release.yml push trigger changed to [main]. Rebuilt clean, no functional regression.'
+- session_id: busybase-gmpull-1
+  id: rest-numeric-filter-lexical-compare-bug
+  subject: gt/gte/lt/lte filters and order= sort compared TEXT-affinity numeric columns lexically, not numerically
+  notes: 'db.ts toFilter built raw string comparisons (''${col} > ${val}'') against TEXT columns -- SQLite compares TEXT lexically so ''20'' > ''9'' is false and ''100'' > ''9'' is false, only ''999'' > ''9'' true. rest.ts order= sort used a[col] > b[col] string comparison with same defect. Confirmed live via curl: gt.price=9 on rows [9,20,100,999] returned only 999 before fix.'
+  status: completed
+  witness: 'Added cmpExpr() helper in db.ts casting both sides to REAL via CAST(col AS REAL) when RHS parses as a finite number and op is gt/gte/lt/lte, applied to the eq/neq/gt/gte/lt/lte branch, the or= branch, and the not. branch. Fixed rest.ts order= sort with numCmp() doing numeric compare when both values parse as finite numbers, else falling back to string compare. Rebuilt (bun run build) and re-verified live: gt.price=9 on [9,20,100,999] now returns [20,100,999]; gt.price=15 returns [20,100,999]; lt.price=100 returns [9,20]; order=price.asc/desc now numerically correct.'

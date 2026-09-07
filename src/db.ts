@@ -235,6 +235,16 @@ export const sweepExpiredIn = async (client: Client) => {
   await client.execute({ sql: "DELETE FROM _sessions WHERE exp < ?", args: [Date.now()] }).catch(() => {});
 };
 
+// TEXT-affinity columns compare lexically ('20' < '9'); when the operand is a
+// finite number and the op is order-sensitive, cast both sides numerically so
+// gt/gte/lt/lte behave as expected on numeric-looking data.
+const cmpExpr = (col: string, s: string, v: string): string => {
+  if ((s === ">" || s === ">=" || s === "<" || s === "<=") && v !== "" && Number.isFinite(Number(v))) {
+    return `CAST(${col} AS REAL) ${s} ${Number(v)}`;
+  }
+  return `${col} ${s} '${v}'`;
+};
+
 export const toFilter = (p: Record<string, string>): string => {
   const skip = new Set(["select", "order", "limit", "offset", "vec", "count"]);
   const parts: string[] = [];
@@ -253,7 +263,7 @@ export const toFilter = (p: Record<string, string>): string => {
         const col = clause.slice(0, d1), op = clause.slice(d1 + 1, d2), v = esc(clause.slice(d2 + 1));
         if (!validId(col)) return null;
         const s = op === "eq" ? "=" : op === "neq" ? "!=" : op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : op === "lte" ? "<=" : null;
-        return s ? `${col} ${s} '${v}'` : null;
+        return s ? cmpExpr(col, s, v) : null;
       }).filter(Boolean);
       if (orParts.length) parts.push(`(${orParts.join(" OR ")})`); continue;
     }
@@ -262,7 +272,7 @@ export const toFilter = (p: Record<string, string>): string => {
       const col = dot >= 0 ? rest.slice(0, dot) : rest, op = dot >= 0 ? rest.slice(dot + 1) : "eq";
       if (!validId(col)) continue;
       const s = op === "eq" ? "=" : op === "neq" ? "!=" : op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : op === "lte" ? "<=" : "=";
-      parts.push(`NOT (${col} ${s} '${esc(val)}')`); continue;
+      parts.push(`NOT (${cmpExpr(col, s, esc(val))})`); continue;
     }
     const op = k.match(/^(eq|neq|gt|gte|lt|lte|like|ilike|is)\./)?.[1];
     if (!op) continue;
@@ -277,7 +287,7 @@ export const toFilter = (p: Record<string, string>): string => {
       parts.push(`${col} IS ${upper}`);
     } else {
       const s = op === "eq" ? "=" : op === "neq" ? "!=" : op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : "<=";
-      parts.push(`${col} ${s} '${safe}'`);
+      parts.push(cmpExpr(col, s, safe));
     }
   }
   return parts.join(" AND ");

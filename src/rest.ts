@@ -29,38 +29,43 @@ export const handleRest = async (client: Client, table: string, req: Request, P:
     rows = await pipeHook("afterSelect", rows, table);
 
     let isVecSearch = false;
-    if (P.vec) {
+    if (paramsHooked.vec) {
       let embedding: unknown;
-      try { embedding = JSON.parse(P.vec); } catch { return err("Invalid vec: must be a JSON array of numbers"); }
+      try { embedding = JSON.parse(paramsHooked.vec); } catch { return err("Invalid vec: must be a JSON array of numbers"); }
       if (!Array.isArray(embedding) || !embedding.every(n => typeof n === "number")) return err("Invalid vec: must be a JSON array of numbers");
       isVecSearch = true;
-      rows = vecSearch(rows, embedding, Math.max(0, parseInt(P.limit) || 10));
+      rows = vecSearch(rows, embedding, Math.max(0, parseInt(paramsHooked.limit) || 10));
     }
 
     let knownCols = rows.length ? new Set(Object.keys(rows[0])) : null;
-    if (!knownCols && (P.select && P.select !== "*" || P.order) && await tableExistsIn(client, table)) {
+    if (!knownCols && (paramsHooked.select && paramsHooked.select !== "*" || paramsHooked.order) && await tableExistsIn(client, table)) {
       knownCols = await getTableColumnsIn(client, table);
     }
-    if (P.select && P.select !== "*") {
-      const requested = P.select.split(",");
+    if (paramsHooked.select && paramsHooked.select !== "*") {
+      const requested = paramsHooked.select.split(",");
       const invalidSyntax = requested.filter(c => !validId(c) && c !== "_distance");
       if (invalidSyntax.length) return err(`Invalid column name in select: ${invalidSyntax.join(", ")}`);
       const unknown = knownCols ? requested.filter(c => !knownCols!.has(c) && c !== "_distance") : [];
       if (unknown.length) return err(`Unknown column in select: ${unknown.join(", ")}`);
       rows = rows.map((r: any) => Object.fromEntries(requested.map(c => [c, r[c]])));
     }
-    if (P.order) {
-      const [col, dir] = P.order.split(".");
+    if (paramsHooked.order) {
+      const [col, dir] = paramsHooked.order.split(".");
       if (!validId(col) && col !== "_distance") return err(`Invalid column name in order: ${col}`);
       if (knownCols && !knownCols.has(col) && col !== "_distance") return err(`Unknown column in order: ${col}`);
-      rows.sort((a: any, b: any) => dir === "desc" ? (b[col] > a[col] ? 1 : -1) : (a[col] > b[col] ? 1 : -1));
+      const numCmp = (x: any, y: any) => {
+        const nx = Number(x), ny = Number(y);
+        if (x !== "" && x != null && y !== "" && y != null && Number.isFinite(nx) && Number.isFinite(ny)) return nx - ny;
+        return x > y ? 1 : x < y ? -1 : 0;
+      };
+      rows.sort((a: any, b: any) => dir === "desc" ? numCmp(b[col], a[col]) : numCmp(a[col], b[col]));
     }
-    const limit = isVecSearch ? rows.length : Math.max(0, parseInt(P.limit) || 1000);
-    const offset = isVecSearch ? 0 : Math.max(0, parseInt(P.offset) || 0);
+    const limit = isVecSearch ? rows.length : Math.max(0, parseInt(paramsHooked.limit) || 1000);
+    const offset = isVecSearch ? 0 : Math.max(0, parseInt(paramsHooked.offset) || 0);
     const page = clean(rows).slice(offset, offset + limit);
     const rangeEnd = page.length ? offset + page.length - 1 : 0;
     const extra: Record<string, string> = {};
-    if (P.count === "exact" || prefer.includes("count=exact")) {
+    if (paramsHooked.count === "exact" || prefer.includes("count=exact")) {
       extra["Content-Range"] = page.length ? `${offset}-${rangeEnd}/${rows.length}` : `*`;
       return Response.json({ data: page, error: null, count: rows.length }, { status: 200, headers: { ...cors, ...extra } });
     }

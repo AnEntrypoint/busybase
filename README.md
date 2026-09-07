@@ -368,6 +368,8 @@ busybase vec embeddings '[1,0,0,0]' 5    # Vector search
 | `BUSYBASE_PORT` | `54321` | HTTP port |
 | `BUSYBASE_DIR` | `busybase_data` | Data directory (`db.sqlite` file) |
 | `BUSYBASE_URL` | `http://localhost:54321` | Public URL (used in reset email links) |
+| `BUSYBASE_CORS_ORIGIN` | `*` | CORS origin header |
+| `BUSYBASE_STUDIO_TOKEN` | — | When set, gates all `/studio*` routes behind a token check (`?token=` or `Authorization: Bearer`) |
 | `BUSYBASE_HOOKS` | — | Path to your hooks file |
 | `BUSYBASE_SMTP_HOST` | — | SMTP hostname |
 | `BUSYBASE_SMTP_PORT` | `587` | SMTP port |
@@ -380,7 +382,7 @@ busybase vec embeddings '[1,0,0,0]' 5    # Vector search
 
 ## Standalone Binaries
 
-Every push to `master` builds self-contained executables — no Bun or Node.js required:
+Every push to `main` builds self-contained executables — no Bun or Node.js required:
 
 | Platform | File |
 |---|---|
