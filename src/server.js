@@ -823,15 +823,20 @@ var server = Bun.serve({
   maxRequestBodySize: MAX_REQUEST_BODY_SIZE,
   websocket: wsHandlers,
   fetch: async (req) => {
-    if (req.headers.get("upgrade") === "websocket" && new URL(req.url).pathname === "/realtime/v1/websocket") {
-      const wsToken = req.headers.get("Authorization")?.split(" ")[1] || new URL(req.url).searchParams.get("token");
+    const { pathname, searchParams } = new URL(req.url);
+    if (req.headers.get("upgrade") === "websocket" && pathname === "/realtime/v1/websocket") {
+      if (hooks.onRequest) {
+        const response = await hooks.onRequest(req);
+        if (response)
+          return response;
+      }
+      const wsToken = req.headers.get("Authorization")?.split(" ")[1] || searchParams.get("token");
       const wsUser = wsToken ? await getUserFromRequestIn(db, new Request(req.url, { headers: { Authorization: `Bearer ${wsToken}` } })).catch(() => null) : null;
       const upgraded = server.upgrade(req, { data: { tables: new Set, user: wsUser } });
       return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
     }
     if (req.method === "OPTIONS")
       return new Response(null, { status: 204, headers: cors });
-    const { pathname, searchParams } = new URL(req.url);
     if (pathname === "/healthz")
       return Response.json({ status: "ok" }, { headers: cors });
     if (hooks.onRequest) {
