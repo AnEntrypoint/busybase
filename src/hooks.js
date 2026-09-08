@@ -9,17 +9,25 @@ var b64e = (s) => Buffer.from(s).toString("base64");
 var smtpSend = async (to, subject, html) => {
   if (!smtpHost)
     return false;
-  const lines = [];
+  let buffer = "";
   let notify = null;
+  const useTls = smtpPort === 465;
+  const isTerminalReplyLine = (line) => !!line && /^\d{3} /.test(line);
+  const isMultiLineReplyComplete = (buf) => {
+    const lines = buf.split(`\r
+`).filter(Boolean);
+    return isTerminalReplyLine(lines[lines.length - 1]);
+  };
   const conn = await Bun.connect({
     hostname: smtpHost,
     port: smtpPort,
+    tls: useTls,
     socket: {
       open() {},
       data(_s, d) {
-        lines.push(...d.toString().split(`\r
-`).filter(Boolean));
-        notify?.();
+        buffer += d.toString();
+        if (isMultiLineReplyComplete(buffer))
+          notify?.();
       },
       error(_s, e) {
         console.error("[SMTP]", e);
@@ -29,26 +37,34 @@ var smtpSend = async (to, subject, html) => {
   });
   const send = (l) => conn.write(l + `\r
 `);
-  const wait = () => new Promise((r) => {
-    notify = r;
-    setTimeout(r, 3000);
+  const wait = (label) => new Promise((resolve, reject) => {
+    buffer = "";
+    notify = () => resolve(buffer.split(`\r
+`).filter(Boolean));
+    setTimeout(() => reject(new Error(`SMTP ${label} timed out waiting for a complete reply: ${JSON.stringify(buffer)}`)), 15000);
   });
+  const expectOk = async (label) => {
+    const lines = await wait(label);
+    const code = parseInt(lines[lines.length - 1]?.slice(0, 3) || "0");
+    if (code >= 400 || code === 0)
+      throw new Error(`SMTP ${label} failed: ${lines.join(" ") || "no response"}`);
+  };
   try {
-    await wait();
+    await expectOk("connect");
     send("EHLO busybase");
-    await wait();
+    await expectOk("EHLO");
     send("AUTH LOGIN");
-    await wait();
+    await expectOk("AUTH LOGIN");
     send(b64e(smtpUser));
-    await wait();
+    await expectOk("AUTH username");
     send(b64e(smtpPass));
-    await wait();
+    await expectOk("AUTH password");
     send(`MAIL FROM:<${smtpFrom}>`);
-    await wait();
+    await expectOk("MAIL FROM");
     send(`RCPT TO:<${to}>`);
-    await wait();
+    await expectOk("RCPT TO");
     send("DATA");
-    await wait();
+    await expectOk("DATA");
     send(`From: ${smtpFrom}\r
 To: ${to}\r
 Subject: ${subject}\r
@@ -57,7 +73,7 @@ Content-Type: text/html; charset=utf-8\r
 \r
 ${html}\r
 .`);
-    await wait();
+    await expectOk("message body");
     send("QUIT");
   } finally {
     conn.end();
@@ -75,8 +91,8 @@ if (hooksFile) {
   }
 }
 var hooks = userHooks;
-var fireHook = async (name, ...args) => {
-  const fn = hooks[name];
+var fireHookOn = async (h, name, ...args) => {
+  const fn = h[name];
   if (!fn)
     return null;
   try {
@@ -86,12 +102,13 @@ var fireHook = async (name, ...args) => {
     if (r && typeof r === "object" && typeof r.error === "string")
       return r.error;
   } catch (e) {
-    return e?.message || String(e);
+    console.error(`[BusyBase] Hook "${String(name)}" threw:`, e);
+    return "Internal error";
   }
   return null;
 };
-var pipeHook = async (name, value, ...args) => {
-  const fn = hooks[name];
+var pipeHookOn = async (h, name, value, ...args) => {
+  const fn = h[name];
   if (!fn)
     return value;
   try {
@@ -101,18 +118,28 @@ var pipeHook = async (name, value, ...args) => {
   } catch {}
   return value;
 };
-var sendEmail = async (to, subject, html, text = "") => {
-  if (hooks.sendEmail) {
-    await hooks.sendEmail({ to, subject, html, text });
+var fireHook = (name, ...args) => fireHookOn(hooks, name, ...args);
+var pipeHook = (name, value, ...args) => pipeHookOn(hooks, name, value, ...args);
+var sendEmailOn = async (h, to, subject, html, text = "") => {
+  if (h.sendEmail) {
+    await h.sendEmail({ to, subject, html, text });
     return;
   }
-  const sent = await smtpSend(to, subject, html);
-  if (!sent)
-    console.log(`[BusyBase] No email transport configured. Would send to ${to}: ${subject}`);
+  try {
+    const sent = await smtpSend(to, subject, html);
+    if (!sent)
+      console.log(`[BusyBase] No email transport configured. Would send to ${to}: ${subject}`);
+  } catch (e) {
+    console.error(`[BusyBase] Failed to send email to ${to}:`, e);
+  }
 };
+var sendEmail = (to, subject, html, text = "") => sendEmailOn(hooks, to, subject, html, text);
 export {
   fireHook,
+  fireHookOn,
   hooks,
   pipeHook,
-  sendEmail
+  pipeHookOn,
+  sendEmail,
+  sendEmailOn
 };

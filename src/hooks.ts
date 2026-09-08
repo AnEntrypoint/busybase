@@ -55,29 +55,46 @@ const b64e = (s: string) => Buffer.from(s).toString("base64");
 
 const smtpSend = async (to: string, subject: string, html: string) => {
   if (!smtpHost) return false;
-  const lines: string[] = [];
+  let buffer = "";
   let notify: (() => void) | null = null;
+  const useTls = smtpPort === 465;
+  const isTerminalReplyLine = (line: string | undefined): boolean => !!line && /^\d{3} /.test(line);
+  const isMultiLineReplyComplete = (buf: string): boolean => {
+    const lines = buf.split("\r\n").filter(Boolean);
+    return isTerminalReplyLine(lines[lines.length - 1]);
+  };
   const conn = await Bun.connect({
-    hostname: smtpHost, port: smtpPort,
+    hostname: smtpHost, port: smtpPort, tls: useTls,
     socket: {
       open() {},
-      data(_s, d) { lines.push(...d.toString().split("\r\n").filter(Boolean)); notify?.(); },
+      data(_s, d) { buffer += d.toString(); if (isMultiLineReplyComplete(buffer)) notify?.(); },
       error(_s, e) { console.error("[SMTP]", e); },
       close() {},
     },
   });
   const send = (l: string) => conn.write(l + "\r\n");
-  const wait = () => new Promise<void>(r => { notify = r; setTimeout(r, 3000); });
+  const wait = (label: string): Promise<string[]> => new Promise((resolve, reject) => {
+    buffer = "";
+    notify = () => resolve(buffer.split("\r\n").filter(Boolean));
+    setTimeout(() => reject(new Error(`SMTP ${label} timed out waiting for a complete reply: ${JSON.stringify(buffer)}`)), 15000);
+  });
+  const expectOk = async (label: string) => {
+    const lines = await wait(label);
+    const code = parseInt(lines[lines.length - 1]?.slice(0, 3) || "0");
+    if (code >= 400 || code === 0) throw new Error(`SMTP ${label} failed: ${lines.join(" ") || "no response"}`);
+  };
   try {
-    await wait(); send("EHLO busybase"); await wait();
-    send("AUTH LOGIN"); await wait();
-    send(b64e(smtpUser)); await wait();
-    send(b64e(smtpPass)); await wait();
-    send(`MAIL FROM:<${smtpFrom}>`); await wait();
-    send(`RCPT TO:<${to}>`); await wait();
-    send("DATA"); await wait();
+    await expectOk("connect");
+    send("EHLO busybase"); await expectOk("EHLO");
+    send("AUTH LOGIN"); await expectOk("AUTH LOGIN");
+    send(b64e(smtpUser)); await expectOk("AUTH username");
+    send(b64e(smtpPass)); await expectOk("AUTH password");
+    send(`MAIL FROM:<${smtpFrom}>`); await expectOk("MAIL FROM");
+    send(`RCPT TO:<${to}>`); await expectOk("RCPT TO");
+    send("DATA"); await expectOk("DATA");
     send(`From: ${smtpFrom}\r\nTo: ${to}\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${html}\r\n.`);
-    await wait(); send("QUIT");
+    await expectOk("message body");
+    send("QUIT");
   } finally { conn.end(); }
   return true;
 };
@@ -94,21 +111,24 @@ if (hooksFile) {
 
 export const hooks: Hooks = userHooks;
 
-// Fire a hook — returns error string if aborted, null otherwise
-export const fireHook = async <K extends keyof Hooks>(name: K, ...args: Parameters<NonNullable<Hooks[K]>>): Promise<string | null> => {
-  const fn = hooks[name] as ((...a: any[]) => any) | undefined;
+// Fire a hook against an explicit Hooks object -- returns error string if aborted, null otherwise.
+export const fireHookOn = async <K extends keyof Hooks>(h: Hooks, name: K, ...args: Parameters<NonNullable<Hooks[K]>>): Promise<string | null> => {
+  const fn = h[name] as ((...a: any[]) => any) | undefined;
   if (!fn) return null;
   try {
     const r = await fn(...args);
     if (r === false) return "Access denied";
     if (r && typeof r === "object" && typeof r.error === "string") return r.error;
-  } catch (e: any) { return e?.message || String(e); }
+  } catch (e: any) {
+    console.error(`[BusyBase] Hook "${String(name)}" threw:`, e);
+    return "Internal error";
+  }
   return null;
 };
 
-// Fire a hook that can transform its input — returns (possibly modified) value
-export const pipeHook = async <K extends keyof Hooks>(name: K, value: any, ...args: any[]): Promise<any> => {
-  const fn = hooks[name] as ((...a: any[]) => any) | undefined;
+// Fire a hook against an explicit Hooks object, transforming its input -- returns (possibly modified) value.
+export const pipeHookOn = async <K extends keyof Hooks>(h: Hooks, name: K, value: any, ...args: any[]): Promise<any> => {
+  const fn = h[name] as ((...a: any[]) => any) | undefined;
   if (!fn) return value;
   try {
     const r = await fn(value, ...args);
@@ -117,9 +137,19 @@ export const pipeHook = async <K extends keyof Hooks>(name: K, value: any, ...ar
   return value;
 };
 
+// Convenience wrappers bound to the module-level singleton (HTTP server path).
+export const fireHook = <K extends keyof Hooks>(name: K, ...args: Parameters<NonNullable<Hooks[K]>>) => fireHookOn(hooks, name, ...args);
+export const pipeHook = <K extends keyof Hooks>(name: K, value: any, ...args: any[]) => pipeHookOn(hooks, name, value, ...args);
+
 // Email: try user hook first, fall back to SMTP
-export const sendEmail = async (to: string, subject: string, html: string, text = "") => {
-  if (hooks.sendEmail) { await hooks.sendEmail({ to, subject, html, text }); return; }
-  const sent = await smtpSend(to, subject, html);
-  if (!sent) console.log(`[BusyBase] No email transport configured. Would send to ${to}: ${subject}`);
+export const sendEmailOn = async (h: Hooks, to: string, subject: string, html: string, text = "") => {
+  if (h.sendEmail) { await h.sendEmail({ to, subject, html, text }); return; }
+  try {
+    const sent = await smtpSend(to, subject, html);
+    if (!sent) console.log(`[BusyBase] No email transport configured. Would send to ${to}: ${subject}`);
+  } catch (e) {
+    console.error(`[BusyBase] Failed to send email to ${to}:`, e);
+  }
 };
+
+export const sendEmail = (to: string, subject: string, html: string, text = "") => sendEmailOn(hooks, to, subject, html, text);

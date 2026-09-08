@@ -4,51 +4,47 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>BusyBase</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/rippleui@1.12.1/dist/css/styles.css"/>
-<script type="importmap">{"imports":{"webjsx":"https://cdn.jsdelivr.net/npm/webjsx@0.0.73/dist/index.js","webjsx/jsx-runtime":"https://cdn.jsdelivr.net/npm/webjsx@0.0.73/dist/jsx-runtime.js"}}</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/anentrypoint-design@latest/dist/247420.css"/>
 <style>
   body{margin:0;font-family:system-ui,sans-serif}
-  .sidebar{width:220px;min-height:100vh;display:flex;flex-direction:column;border-right:1px solid var(--border)}
-  .main{flex:1;padding:1.5rem;overflow:auto}
-  .layout{display:flex;min-height:100vh}
-  .nav-item{padding:.5rem 1rem;cursor:pointer;border-radius:.375rem;margin:.1rem .5rem;font-size:.875rem}
-  .nav-item:hover{background:var(--btn-color-ghost-hover)}
-  .nav-item.active{background:var(--btn-color-solid);color:#fff}
-  .cell-edit{outline:none;background:transparent;width:100%;font-size:.85rem;padding:2px 4px}
+  .bb-nav-item{padding:.5rem 1rem;cursor:pointer;border-radius:.375rem;margin:.1rem .5rem;font-size:.875rem}
+  .bb-nav-item:hover{background:rgba(127,127,127,.12)}
+  .bb-nav-item.active{background:var(--ds-accent,#6366f1);color:#fff}
+  .bb-cell-edit{outline:none;background:transparent;width:100%;font-size:.85rem;padding:2px 4px}
+  .bb-toasts{position:fixed;bottom:1.5rem;right:1.5rem;z-index:999;display:flex;flex-direction:column;gap:.5rem;max-width:320px}
   pre{background:#1e1e2e;color:#cdd6f4;padding:1rem;border-radius:.5rem;overflow:auto;font-size:.8rem;max-height:300px}
-  .toast{position:fixed;bottom:1.5rem;right:1.5rem;z-index:999;display:flex;flex-direction:column;gap:.5rem}
-  .dimmed{opacity:.4;pointer-events:none}
-  th,td{white-space:nowrap}
+  .bb-editable-table{width:100%;border-collapse:collapse;font-size:.85rem}
+  .bb-editable-table th,.bb-editable-table td{padding:.4rem .6rem;white-space:nowrap;text-align:left;border-bottom:1px solid rgba(127,127,127,.15)}
 </style>
 </head>
 <body>
 <div id="app"></div>
 <script type="module">
-import { applyDiff, createElement as h, Fragment } from "webjsx";
+import { h, webjsx, mount, components, initTheme } from "https://cdn.jsdelivr.net/npm/anentrypoint-design@latest/dist/247420.js";
+const { Btn, TextField, Alert, Panel, Topbar, Side, AppShell } = components;
 
-// ── state ──────────────────────────────────────────────────────────────────
 const S = {
-  tab: "data",        // data | auth | api | logs
+  tab: "data",
   tables: [],
   activeTable: null,
   rows: [],
   schema: [],
-  users: [],
   toasts: [],
   loading: false,
   sql: "",
   sqlResult: null,
   logs: [],
-  editCell: null,     // {row,col}
+  editCell: null,
   newRow: {},
+  newTableName: "",
   filter: "",
   session: null,
   loginEmail: "", loginPass: "", loginError: "",
 };
 
 const BASE = location.origin;
+let render;
 
-// ── helpers ────────────────────────────────────────────────────────────────
 const api = async (path, opts = {}) => {
   const headers = { "Content-Type": "application/json", apikey: "local", ...(S.session ? { Authorization: `Bearer ${S.session.access_token}` } : {}) };
   try {
@@ -59,9 +55,9 @@ const api = async (path, opts = {}) => {
   } catch(e) { log("ERROR", e.message); return { error: { message: e.message } }; }
 };
 
-const toast = (msg, type = "info") => {
+const toast = (msg, kind = "info") => {
   const id = Date.now();
-  S.toasts.push({ id, msg, type });
+  S.toasts.push({ id, msg, kind });
   render();
   setTimeout(() => { S.toasts = S.toasts.filter(t => t.id !== id); render(); }, 3000);
 };
@@ -80,8 +76,6 @@ const load = async (table) => {
 };
 
 const loadTables = async () => {
-  // BusyBase doesn't have a /tables endpoint — infer from REST by querying known tables
-  // We persist table list in localStorage
   const stored = localStorage.getItem("_bb_gui_tables");
   S.tables = stored ? JSON.parse(stored) : [];
   render();
@@ -101,7 +95,6 @@ const removeTable = (name) => {
   saveTables(); render();
 };
 
-// ── login ──────────────────────────────────────────────────────────────────
 const tryLogin = async () => {
   const r = await api("/auth/v1/token", { method: "POST", body: JSON.stringify({ email: S.loginEmail, password: S.loginPass }) });
   if (r.error) { S.loginError = r.error.message; render(); return; }
@@ -110,7 +103,6 @@ const tryLogin = async () => {
 };
 
 const tryKeypairLogin = async () => {
-  // generate keypair & sign nonce
   const kpRaw = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
   const [pub, priv] = await Promise.all([
     crypto.subtle.exportKey("raw", kpRaw.publicKey),
@@ -141,10 +133,6 @@ const tryRestoreKeypair = async () => {
   return false;
 };
 
-// auto-restore keypair on load
-tryRestoreKeypair().then(ok => { if (!ok) render(); else loadTables(); });
-
-// ── data tab ───────────────────────────────────────────────────────────────
 const DataTab = () => {
   const cols = S.schema.filter(c => c !== "vector");
   const filtered = S.filter
@@ -154,7 +142,7 @@ const DataTab = () => {
   const insertRow = async () => {
     if (!S.activeTable || !Object.keys(S.newRow).length) return;
     const r = await api(`/rest/v1/${S.activeTable}`, { method: "POST", body: JSON.stringify(S.newRow) });
-    if (r.error) { toast(r.error.message, "error"); return; }
+    if (r.error) { toast(r.error.message, "danger"); return; }
     S.newRow = {}; toast("Inserted"); await load(S.activeTable);
   };
 
@@ -168,63 +156,59 @@ const DataTab = () => {
     S.editCell = null; toast("Saved"); await load(S.activeTable);
   };
 
-  return h("div", { class: "flex gap-4 h-full" },
-    // Sidebar: table list
-    h("div", { class: "w-48 flex-shrink-0" },
-      h("div", { class: "flex gap-2 mb-3" },
-        h("input", { class: "input input-sm flex-1", placeholder: "table name", id: "new-tbl-input",
-          onkeydown: e => e.key === "Enter" && (addTable(e.target.value), e.target.value = "") }),
-        h("button", { class: "btn btn-sm btn-primary", onclick: () => { const el = document.getElementById("new-tbl-input"); addTable(el.value); el.value = ""; } }, "+"),
+  return h("div", { style: "display:flex;gap:1rem;height:100%" },
+    h("div", { style: "width:12rem;flex-shrink:0" },
+      h("div", { style: "display:flex;gap:.5rem;margin-bottom:.75rem" },
+        TextField({ value: S.newTableName, placeholder: "table name", key: "new-tbl",
+          onInput: v => { S.newTableName = v; } }),
+        Btn({ variant: "primary", size: "sm", onClick: () => { addTable(S.newTableName); S.newTableName = ""; render(); }, children: "+" }),
       ),
-      S.tables.map(t => h("div", { class: `nav-item flex justify-between items-center ${t === S.activeTable ? "active" : ""}`,
+      S.tables.map(t => h("div", { key: t, class: `bb-nav-item ${t === S.activeTable ? "active" : ""}`,
+          style: "display:flex;justify-content:space-between;align-items:center",
           onclick: () => load(t) },
         h("span", null, t),
-        h("span", { class: "text-xs opacity-50 hover:opacity-100", onclick: e => { e.stopPropagation(); removeTable(t); } }, "✕")
+        h("span", { style: "font-size:.75rem;opacity:.5", onclick: e => { e.stopPropagation(); removeTable(t); } }, "x")
       ))
     ),
-    // Main: table view
-    h("div", { class: "flex-1 overflow-auto" },
+    h("div", { style: "flex:1;overflow:auto" },
       !S.activeTable
-        ? h("div", { class: "text-content2 mt-8 text-center" }, "Add a table name to get started")
-        : h(Fragment, null,
-            // Toolbar
-            h("div", { class: "flex gap-2 mb-3 items-center" },
-              h("input", { class: "input input-sm", placeholder: "filter...", value: S.filter,
-                oninput: e => { S.filter = e.target.value; render(); } }),
-              h("button", { class: "btn btn-sm btn-ghost", onclick: () => load(S.activeTable) }, "↻"),
-              h("span", { class: "text-sm text-content2" }, `${filtered.length} rows`),
+        ? h("div", { key: "empty-state", style: "opacity:.6;margin-top:2rem;text-align:center" }, "Add a table name to get started")
+        : h("div", { key: "table-view" },
+            h("div", { style: "display:flex;gap:.5rem;margin-bottom:.75rem;align-items:center" },
+              TextField({ value: S.filter, placeholder: "filter...", key: "filter",
+                onInput: v => { S.filter = v; render(); } }),
+              Btn({ variant: "ghost", size: "sm", onClick: () => load(S.activeTable), children: "Refresh" }),
+              h("span", { style: "font-size:.85rem;opacity:.7" }, `${filtered.length} rows`),
             ),
-            // Table
             S.loading
-              ? h("div", { class: "flex justify-center p-8" }, h("span", { class: "loading" }))
-              : h("div", { class: "overflow-x-auto" },
-                  h("table", { class: "table table-hover table-compact" },
+              ? h("div", { style: "padding:2rem;text-align:center" }, "Loading...")
+              : h("div", { style: "overflow-x:auto" },
+                  h("table", { class: "bb-editable-table" },
                     h("thead", null, h("tr", null,
-                      ...cols.map(c => h("th", null, c)),
+                      ...cols.map(c => h("th", { key: c }, c)),
                       h("th", null, "")
                     )),
                     h("tbody", null,
-                      // New row input
-                      h("tr", { class: "bg-base-200" },
-                        ...cols.map(c => h("td", null,
-                          h("input", { class: "cell-edit input input-xs", placeholder: c, value: S.newRow[c] || "",
+                      h("tr", null,
+                        ...cols.map(c => h("td", { key: c },
+                          h("input", { class: "bb-cell-edit", placeholder: c, value: S.newRow[c] || "",
                             oninput: e => { S.newRow[c] = e.target.value; } })
                         )),
-                        h("td", null, h("button", { class: "btn btn-xs btn-success", onclick: insertRow }, "＋"))
+                        h("td", null, Btn({ variant: "primary", size: "sm", onClick: insertRow, children: "Add" }))
                       ),
-                      ...filtered.map(row => h("tr", null,
+                      ...filtered.map(row => h("tr", { key: row.id },
                         ...cols.map(col => {
                           const editing = S.editCell?.row === row.id && S.editCell?.col === col;
-                          return h("td", { ondblclick: () => { S.editCell = { row: row.id, col }; render(); } },
+                          return h("td", { key: col, ondblclick: () => { S.editCell = { row: row.id, col }; render(); } },
                             editing
-                              ? h("input", { class: "cell-edit", "data-autofit": "1", value: row[col] ?? "",
+                              ? h("input", { class: "bb-cell-edit", value: row[col] ?? "",
                                   onblur: e => saveCell(row, col, e.target.value),
                                   onkeydown: e => e.key === "Enter" && saveCell(row, col, e.target.value),
                                   ref: el => el?.focus() })
-                              : h("span", { class: "text-sm" }, String(row[col] ?? ""))
+                              : h("span", null, String(row[col] ?? ""))
                           );
                         }),
-                        h("td", null, h("button", { class: "btn btn-xs btn-error btn-ghost", onclick: () => deleteRow(row) }, "✕"))
+                        h("td", null, Btn({ variant: "danger", size: "sm", onClick: () => deleteRow(row), children: "Delete" }))
                       ))
                     )
                   )
@@ -234,7 +218,6 @@ const DataTab = () => {
   );
 };
 
-// ── auth tab ───────────────────────────────────────────────────────────────
 const AuthTab = () => {
   const exportKey = () => {
     const pk = localStorage.getItem("_bb_privkey"), pub = localStorage.getItem("_bb_pubkey");
@@ -250,64 +233,57 @@ const AuthTab = () => {
       const { privkey, pubkey } = JSON.parse(raw);
       localStorage.setItem("_bb_privkey", privkey); localStorage.setItem("_bb_pubkey", pubkey);
       await tryRestoreKeypair(); toast("Keypair restored");
-    } catch { toast("Invalid keypair", "error"); }
+    } catch { toast("Invalid keypair", "danger"); }
   };
 
-  return h("div", { class: "max-w-lg" },
+  return h("div", { style: "max-width:32rem" },
     S.session
-      ? h("div", { class: "flex flex-col gap-4" },
-          h("div", { class: "alert alert-success" }, "Signed in as: " + (S.session.user?.email || S.session.user?.id || "anonymous")),
-          h("div", { class: "card" },
-            h("div", { class: "card-body gap-3" },
-              h("h2", { class: "card-header" }, "Session"),
+      ? h("div", { style: "display:flex;flex-direction:column;gap:1rem" },
+          Alert({ kind: "success", children: "Signed in as: " + (S.session.user?.email || S.session.user?.id || "anonymous") }),
+          Panel({ title: "Session", children:
+            h("div", null,
               h("pre", null, JSON.stringify(S.session.user, null, 2)),
-              h("div", { class: "flex gap-2" },
-                h("button", { class: "btn btn-sm btn-outline-primary", onclick: exportKey }, "📋 Export keypair"),
-                h("button", { class: "btn btn-sm btn-ghost", onclick: importKey }, "🔑 Import keypair"),
-                h("button", { class: "btn btn-sm btn-error btn-ghost ml-auto", onclick: async () => {
+              h("div", { style: "display:flex;gap:.5rem" },
+                Btn({ variant: "default", size: "sm", onClick: exportKey, children: "Export keypair" }),
+                Btn({ variant: "ghost", size: "sm", onClick: importKey, children: "Import keypair" }),
+                Btn({ variant: "danger", size: "sm", onClick: async () => {
                   await api("/auth/v1/logout", { method: "POST" });
                   S.session = null; render();
-                }}, "Sign out"),
+                }, children: "Sign out" }),
               )
             )
-          )
+          })
         )
-      : h("div", { class: "flex flex-col gap-4" },
-          // Keypair (default / anonymous)
-          h("div", { class: "card" },
-            h("div", { class: "card-body gap-3" },
-              h("h2", { class: "card-header" }, "Anonymous (keypair)"),
-              h("p", { class: "text-content2 text-sm" }, "No signup required. Your keypair is your identity."),
-              h("div", { class: "flex gap-2" },
-                h("button", { class: "btn btn-primary", onclick: async () => { await tryKeypairLogin(); loadTables(); } }, "Sign in anonymously"),
-                h("button", { class: "btn btn-ghost", onclick: importKey }, "Restore from key"),
+      : h("div", { style: "display:flex;flex-direction:column;gap:1rem" },
+          Panel({ title: "Anonymous (keypair)", children:
+            h("div", null,
+              h("p", { style: "font-size:.85rem;opacity:.7" }, "No signup required. Your keypair is your identity."),
+              h("div", { style: "display:flex;gap:.5rem" },
+                Btn({ variant: "primary", onClick: async () => { await tryKeypairLogin(); loadTables(); }, children: "Sign in anonymously" }),
+                Btn({ variant: "ghost", onClick: importKey, children: "Restore from key" }),
               )
             )
-          ),
-          // Email/password
-          h("div", { class: "card" },
-            h("div", { class: "card-body gap-3" },
-              h("h2", { class: "card-header" }, "Email / Password"),
-              S.loginError && h("div", { class: "alert alert-error text-sm" }, S.loginError),
-              h("input", { class: "input", placeholder: "email", type: "email", value: S.loginEmail,
-                oninput: e => { S.loginEmail = e.target.value; } }),
-              h("input", { class: "input", placeholder: "password", type: "password", value: S.loginPass,
-                oninput: e => { S.loginPass = e.target.value; },
-                onkeydown: e => e.key === "Enter" && tryLogin() }),
-              h("div", { class: "flex gap-2" },
-                h("button", { class: "btn btn-primary", onclick: tryLogin }, "Sign in"),
-                h("button", { class: "btn btn-ghost", onclick: async () => {
+          }),
+          Panel({ title: "Email / Password", children:
+            h("div", { style: "display:flex;flex-direction:column;gap:.5rem" },
+              S.loginError && Alert({ kind: "danger", children: S.loginError }),
+              TextField({ label: "Email", type: "email", value: S.loginEmail,
+                onInput: v => { S.loginEmail = v; } }),
+              TextField({ label: "Password", type: "password", value: S.loginPass,
+                onInput: v => { S.loginPass = v; } }),
+              h("div", { style: "display:flex;gap:.5rem" },
+                Btn({ variant: "primary", onClick: tryLogin, children: "Sign in" }),
+                Btn({ variant: "ghost", onClick: async () => {
                   const r = await api("/auth/v1/signup", { method: "POST", body: JSON.stringify({ email: S.loginEmail, password: S.loginPass }) });
                   if (r.error) { S.loginError = r.error.message; render(); } else { toast("Account created — sign in"); }
-                }}, "Sign up"),
+                }, children: "Sign up" }),
               )
             )
-          )
+          })
         )
   );
 };
 
-// ── api explorer tab ───────────────────────────────────────────────────────
 const ApiTab = () => {
   const examples = [
     ["GET all rows", () => S.activeTable ? `GET /rest/v1/${S.activeTable}` : "GET /rest/v1/mytable"],
@@ -332,67 +308,65 @@ const ApiTab = () => {
     S.sqlResult = r; render();
   };
 
-  return h("div", { class: "flex flex-col gap-4 max-w-2xl" },
-    h("div", { class: "flex flex-wrap gap-2" },
-      ...examples.map(([label, fn]) => h("button", { class: "btn btn-sm btn-ghost btn-outline-secondary",
-        onclick: () => { S.sql = fn(); S.sqlResult = null; render(); } }, label))
+  return h("div", { style: "display:flex;flex-direction:column;gap:1rem;max-width:42rem" },
+    h("div", { style: "display:flex;flex-wrap:wrap;gap:.5rem" },
+      ...examples.map(([label, fn]) => Btn({ key: label, variant: "ghost", size: "sm",
+        onClick: () => { S.sql = fn(); S.sqlResult = null; render(); }, children: label }))
     ),
-    h("textarea", { class: "textarea font-mono text-sm h-32", placeholder: "METHOD /path\n{body json}", value: S.sql,
+    h("textarea", { style: "font-family:monospace;font-size:.85rem;height:8rem;width:100%;box-sizing:border-box;padding:.5rem", placeholder: "METHOD /path\n{body json}", value: S.sql,
       oninput: e => { S.sql = e.target.value; } }),
-    h("button", { class: "btn btn-primary w-fit", onclick: run }, "Run ▶"),
+    Btn({ variant: "primary", onClick: run, children: "Run" }),
     S.sqlResult && h("pre", null, JSON.stringify(S.sqlResult, null, 2))
   );
 };
 
-// ── logs tab ───────────────────────────────────────────────────────────────
 const LogsTab = () =>
-  h("div", { class: "flex flex-col gap-2" },
-    h("div", { class: "flex gap-2 mb-2" },
-      h("button", { class: "btn btn-sm btn-ghost", onclick: () => { S.logs = []; render(); } }, "Clear")
+  h("div", { style: "display:flex;flex-direction:column;gap:.5rem" },
+    h("div", { style: "margin-bottom:.5rem" },
+      Btn({ variant: "ghost", size: "sm", onClick: () => { S.logs = []; render(); }, children: "Clear" })
     ),
-    ...S.logs.map(l => h("div", { class: "card card-border" },
-      h("div", { class: "card-body py-2 gap-1" },
-        h("div", { class: "flex gap-3 items-center" },
-          h("span", { class: "badge badge-flat-primary badge-sm" }, l.ts),
-          h("span", { class: "font-medium text-sm" }, l.label),
-        ),
-        h("pre", { class: "text-xs !p-2 !max-h-40" }, l.data)
-      )
-    ))
+    ...S.logs.map((l, i) => Panel({ key: i, title: `${l.ts} — ${l.label}`, children:
+      h("pre", { style: "max-height:10rem" }, l.data)
+    }))
   );
 
-// ── shell ──────────────────────────────────────────────────────────────────
-const App = () => h("div", { class: "layout" },
-  // Sidebar
-  h("aside", { class: "sidebar" },
-    h("div", { class: "sidebar-title p-4 font-bold text-lg flex items-center gap-2" },
-      h("span", null, "🚀"), h("span", null, "BusyBase")
-    ),
-    h("div", { class: "sidebar-content flex flex-col gap-1 pt-2" },
-      ["data", "auth", "api", "logs"].map(t =>
-        h("div", { class: `nav-item ${S.tab === t ? "active" : ""}`,
-          onclick: () => { S.tab = t; render(); } },
-          { data: "📋 Data", auth: "👤 Auth", api: "⚡ API Explorer", logs: "📜 Logs" }[t]
-        )
-      )
-    ),
-    S.session && h("div", { class: "sidebar-footer p-3" },
-      h("div", { class: "badge badge-flat-success badge-sm truncate max-w-full" },
-        S.session.user?.email || "anonymous")
+const TABS = [
+  ["data", "Data", DataTab],
+  ["auth", "Auth", AuthTab],
+  ["api", "API Explorer", ApiTab],
+  ["logs", "Logs", LogsTab],
+];
+
+const App = () => AppShell({
+  topbar: Topbar({
+    brand: "BusyBase",
+    items: TABS.map(([id, label]) => [label, `#${id}`]),
+    active: TABS.find(([id]) => id === S.tab)?.[1] || "",
+    onNav: (label) => { const found = TABS.find(([, l]) => l === label); if (found) { S.tab = found[0]; render(); } },
+  }),
+  side: Side({
+    sections: [{
+      group: "Views",
+      items: TABS.map(([id, label]) => ({
+        label, active: id === S.tab,
+        onClick: (e) => { e.preventDefault(); S.tab = id; render(); },
+        href: `#${id}`,
+      })),
+    }],
+  }),
+  main: h("div", null,
+    (TABS.find(([id]) => id === S.tab)?.[2] || DataTab)(),
+    h("div", { class: "bb-toasts" },
+      ...S.toasts.map(t => Alert({ key: t.id, kind: t.kind, children: t.msg }))
     )
   ),
-  // Main
-  h("main", { class: "main" },
-    { data: DataTab, auth: AuthTab, api: ApiTab, logs: LogsTab }[S.tab]?.()
-  ),
-  // Toasts
-  h("div", { class: "toast" },
-    ...S.toasts.map(t => h("div", { class: `alert alert-${t.type === "error" ? "error" : t.type === "warning" ? "warning" : "info"}` }, t.msg))
-  )
-);
+  status: S.session ? h("span", null, S.session.user?.email || "anonymous") : null,
+});
 
-const render = () => applyDiff(document.getElementById("app"), h(App, null));
-render();
+initTheme();
+render = mount(document.getElementById("app"), () => App());
+loadTables();
+tryRestoreKeypair();
 </script>
 </body>
 </html>

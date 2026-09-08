@@ -44,35 +44,30 @@ var BB = (url, key) => {
   const keypair = {
     generate: genKeypair,
     signIn: async (privkeyB64) => {
-      try {
-        let privkey = privkeyB64 ?? store.getItem("_bb_privkey");
-        let pubkey = store.getItem("_bb_pubkey");
-        if (!privkey) {
-          const kp = await genKeypair();
-          privkey = kp.privkey;
-          pubkey = kp.pubkey;
-          store.setItem("_bb_privkey", privkey);
-          store.setItem("_bb_pubkey", pubkey);
-        } else if (!pubkey) {
-          const privCrypto = await crypto.subtle.importKey("pkcs8", unb64(privkey), { name: "Ed25519" }, true, ["sign"]);
-          return { data: null, error: { message: "Pubkey missing — call keypair.restore(privkey, pubkey)" } };
-        }
-        const nonceRes = await req("auth/v1/keypair");
-        if (nonceRes.error)
-          return nonceRes;
-        const nonce = nonceRes.data.nonce;
-        const signature = await sign(privkey, nonce);
-        const r = await req("auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature }) });
-        if (r.data?.session) {
-          setSession_(r.data.session);
-          store.setItem("_bb_privkey", privkey);
-          store.setItem("_bb_pubkey", pubkey);
-          emit("SIGNED_IN", session);
-        }
-        return r;
-      } catch (e) {
-        return { data: null, error: { message: e?.message || "Keypair sign-in failed" } };
+      let privkey = privkeyB64 ?? store.getItem("_bb_privkey");
+      let pubkey = store.getItem("_bb_pubkey");
+      if (!privkey) {
+        const kp = await genKeypair();
+        privkey = kp.privkey;
+        pubkey = kp.pubkey;
+        store.setItem("_bb_privkey", privkey);
+        store.setItem("_bb_pubkey", pubkey);
+      } else if (!pubkey) {
+        return { data: null, error: { message: "Pubkey missing — call keypair.restore(privkey, pubkey)" } };
       }
+      const nonceRes = await req("auth/v1/keypair");
+      if (nonceRes.error)
+        return nonceRes;
+      const nonce = nonceRes.data.nonce;
+      const signature = await sign(privkey, nonce);
+      const r = await req("auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature }) });
+      if (r.data?.session) {
+        setSession_(r.data.session);
+        store.setItem("_bb_privkey", privkey);
+        store.setItem("_bb_pubkey", pubkey);
+        emit("SIGNED_IN", session);
+      }
+      return r;
     },
     restore: async (privkey, pubkey) => {
       store.setItem("_bb_privkey", privkey);
@@ -89,7 +84,7 @@ var BB = (url, key) => {
     }
   };
   const Q = (table, method, body) => {
-    const q = { filters: [], order: "", limit: 0, offset: 0, select: "*", count: "" };
+    const q = { filters: [], order: "", limit: 0, offset: 0, select: "*", vec: "", count: "" };
     let _single = false, _maybeSingle = false;
     const qs = () => {
       const p = [`select=${q.select}`, ...q.filters];
@@ -99,6 +94,8 @@ var BB = (url, key) => {
         p.push(`limit=${q.limit}`);
       if (q.offset)
         p.push(`offset=${q.offset}`);
+      if (q.vec)
+        p.push(`vec=${encodeURIComponent(q.vec)}`);
       if (q.count)
         p.push(`count=${q.count}`);
       return p.join("&");
@@ -140,6 +137,7 @@ var BB = (url, key) => {
       count: (type = "exact") => (q.count = type, b),
       single: () => (_single = true, b),
       maybeSingle: () => (_maybeSingle = true, b),
+      vec: (embedding, limit = 10) => (q.vec = JSON.stringify(embedding), q.limit = limit, b),
       then: (res, rej) => resolve().then(res, rej)
     };
     return b;
@@ -195,7 +193,7 @@ var BB = (url, key) => {
       setSession_(s);
       return Promise.resolve({ data: { session: s }, error: null });
     },
-    resetPasswordForEmail: (_email) => Promise.resolve({ data: {}, error: null }),
+    resetPasswordForEmail: (email) => req("auth/v1/recover", { method: "POST", body: JSON.stringify({ email }) }),
     onAuthStateChange: (cb) => {
       authListeners.push(cb);
       cb("INITIAL_SESSION", session);

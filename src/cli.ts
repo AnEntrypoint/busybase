@@ -12,6 +12,7 @@
  *   busybase query <table> [filter...]      Query rows (filter: col=val)
  *   busybase update <table> <json> [filter] Update rows
  *   busybase delete <table> <col>=<val>     Delete rows
+ *   busybase vec <table> <embedding-json> [limit]  Vector similarity search
  */
 
 import BB from "./sdk.ts";
@@ -24,7 +25,7 @@ const [cmd, ...args] = process.argv.slice(2);
 const db = BB(URL, KEY);
 
 const print = (x: any) => console.log(JSON.stringify(x, null, 2));
-const die = (msg: string) => { console.error("Error:", msg); process.exit(1); };
+const die = (msg: string): never => { console.error("Error:", msg); process.exit(1); };
 
 const parseFilter = (q: any, filters: string[]) => {
   for (const f of filters) {
@@ -92,6 +93,15 @@ else if (cmd === "delete") {
   let q = db.from(table).delete();
   q = parseFilter(q, filters);
   const r = await q;
+  print(r);
+}
+
+else if (cmd === "vec") {
+  const [table, jsonStr, limitStr] = args;
+  if (!table || !jsonStr) die("Usage: busybase vec <table> <embedding-json> [limit]");
+  const embedding = (() => { try { return JSON.parse(jsonStr); } catch { return null; } })();
+  if (!Array.isArray(embedding)) die("Embedding must be a JSON array, e.g. '[1,0,0,0]'");
+  const r = await db.from(table).select("*").vec(embedding, limitStr ? parseInt(limitStr) : 10);
   print(r);
 }
 
@@ -242,6 +252,34 @@ else if (cmd === "test") {
   const sel = await db.from(tbl).select("name");
   check(".select(cols) — only name key", sel.data?.[0] && Object.keys(sel.data[0]).length === 1, sel.data?.[0]);
 
+  console.log("\n[vector search]");
+  const vecTbl = `vec_${Date.now()}`;
+  await db.from(vecTbl).insert([
+    { label: "cats", vector: JSON.stringify([0.9, 0.1, 0.0, 0.0]) },
+    { label: "dogs", vector: JSON.stringify([0.1, 0.9, 0.0, 0.0]) },
+    { label: "no_vector" },
+  ]);
+  const vecRes = await db.from(vecTbl).select("*").vec([0.85, 0.15, 0.0, 0.0], 5);
+  check(".vec — returns {data,error}", vecRes.data !== undefined && "error" in vecRes, vecRes);
+  check(".vec — closest match is cats", vecRes.data?.[0]?.label === "cats", vecRes.data);
+  check(".vec — includes _distance", typeof vecRes.data?.[0]?._distance === "number", vecRes.data?.[0]);
+  check(".vec — excludes rows without a vector", vecRes.data?.every((r: any) => r.label !== "no_vector"), vecRes.data);
+  check(".vec — sorted ascending by _distance", (vecRes.data?.length ?? 0) < 2 || vecRes.data[0]._distance <= vecRes.data[1]._distance, vecRes.data);
+  const vecLimited = await db.from(vecTbl).select("*").vec([0.85, 0.15, 0.0, 0.0], 1);
+  check(".vec — limit respected", vecLimited.data?.length === 1, vecLimited.data);
+
+  console.log("\n[column validation]");
+  const badSelectNonEmpty = await db.from(tbl).select("bogus_col");
+  check("select unknown column (non-empty result set) — 400", !!badSelectNonEmpty.error, badSelectNonEmpty);
+  const badOrderNonEmpty = await db.from(tbl).select("*").order("bogus_col");
+  check("order unknown column (non-empty result set) — 400", !!badOrderNonEmpty.error, badOrderNonEmpty);
+  const badSelectEmpty = await db.from(tbl).select("bogus_col").eq("name", "NoSuchPersonAtAll");
+  check("select unknown column (empty result set) — 400", !!badSelectEmpty.error, badSelectEmpty);
+  const badOrderEmpty = await db.from(tbl).select("*").eq("name", "NoSuchPersonAtAll").order("bogus_col");
+  check("order unknown column (empty result set) — 400", !!badOrderEmpty.error, badOrderEmpty);
+  const goodSelectEmpty = await db.from(tbl).select("name").eq("name", "NoSuchPersonAtAll");
+  check("select known column (empty result set) — ok", !goodSelectEmpty.error, goodSelectEmpty);
+
   console.log("\n[update + delete]");
   const upd = await db.from(tbl).update({ score: "99" }).eq("name", "Alice");
   check(".update.eq — score=99", upd.data?.[0]?.score === "99", upd.data);
@@ -275,9 +313,8 @@ else if (cmd === "test") {
   const ss = await db.auth.setSession({ access_token: "fake", refresh_token: "fake" });
   check("setSession returns {data,error}", ss.data !== undefined && "error" in ss, ss);
 
-  // resetPasswordForEmail stub
   const rpf = await db.auth.resetPasswordForEmail("anyone@example.com");
-  check("resetPasswordForEmail stub ok", !rpf.error, rpf);
+  check("resetPasswordForEmail hits real /auth/v1/recover endpoint", !rpf.error, rpf);
 
   // --- Realtime ---
   const rtTbl = `rt_${Date.now()}`;
@@ -331,6 +368,22 @@ else if (cmd === "test") {
   check("realtime DELETE old.name=rt_alice", rtDel?.old?.name === "rt_alice", rtDel);
   ws1.close();
 
+  const rtAuthTbl = `rtauth_${Date.now()}`;
+  const kpReauth = await db.auth.keypair.signIn();
+  const authToken = kpReauth.data?.session?.access_token;
+  const ws2 = new (globalThis as any).WebSocket(`${wsUrl}?token=${authToken}`);
+  await wsWait(ws2, "open");
+  ws2.send(JSON.stringify({ type: "subscribe", table: rtAuthTbl }));
+  const recv4: Promise<any> = new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error("timeout authenticated subscribe INSERT")), 3000);
+    ws2.onmessage = (e: any) => { clearTimeout(t); res(JSON.parse(typeof e.data === "string" ? e.data : e.data.toString())); };
+  });
+  await db.from(rtAuthTbl).insert({ name: "auth_probe" });
+  let rtAuthMsg: any;
+  try { rtAuthMsg = await recv4; } catch { rtAuthMsg = null; }
+  check("realtime subscribe with ?token= still receives events", rtAuthMsg?.eventType === "INSERT", rtAuthMsg);
+  ws2.close();
+
   // Test 4: SDK channel() subscribe
   const rtTbl2 = `rt2_${Date.now()}`;
   const chEvents: any[] = [];
@@ -361,6 +414,7 @@ Commands:
   query <table> [col=val ...]      Query with filters
   update <table> <json> [col=val]  Update rows
   delete <table> <col=val> ...     Delete rows
+  vec <table> <embedding-json> [limit]  Vector similarity search
 
 Environment:
   BUSYBASE_URL   Server URL (default: http://localhost:54321)

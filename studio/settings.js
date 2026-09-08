@@ -1,3 +1,7 @@
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 export async function render(container) {
   let config = null, error = null;
 
@@ -10,7 +14,7 @@ export async function render(container) {
   container.innerHTML = `
     <div>
       <div style="font-size:20px;font-weight:700;margin-bottom:16px">Settings</div>
-      ${error ? `<div style="color:#ef4444;margin-bottom:12px">${error}</div>` : ''}
+      ${error ? `<div style="color:#ef4444;margin-bottom:12px">${esc(error)}</div>` : ''}
       ${config ? `
         <div style="margin-bottom:24px">
           <div style="font-weight:600;margin-bottom:8px">Server Configuration</div>
@@ -21,8 +25,8 @@ export async function render(container) {
             </tr></thead>
             <tbody>
               ${Object.entries(config).map(([k,v]) => `<tr>
-                <td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;font-weight:600">${k}</td>
-                <td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace">${v}</td>
+                <td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace;font-weight:600">${esc(k)}</td>
+                <td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:monospace">${esc(v)}</td>
               </tr>`).join('')}
             </tbody>
           </table>

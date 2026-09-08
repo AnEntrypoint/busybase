@@ -2,13 +2,13 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-7c6af7.svg)](LICENSE)
 [![Built with Bun](https://img.shields.io/badge/Built%20with-Bun-f9f1e1.svg?logo=bun)](https://bun.sh)
-[![libSQL](https://img.shields.io/badge/Storage-libSQL%2FSQLite-38bdf8.svg)](https://github.com/tursodatabase/libsql)
+[![libSQL](https://img.shields.io/badge/Storage-libSQL-38bdf8.svg)](https://github.com/tursodatabase/libsql)
 [![Supabase Compatible](https://img.shields.io/badge/API-Supabase%20JS%20v2-3ecf8e.svg)](https://supabase.com/docs/reference/javascript)
 [![Releases](https://img.shields.io/github/v/release/AnEntrypoint/busybase?color=a78bfa)](https://github.com/AnEntrypoint/busybase/releases)
 
 **A minimal, drop-in Supabase alternative — self-hosted, no Docker, no Postgres, no config files.**
 
-Built on [Bun](https://bun.sh) + [libSQL](https://github.com/tursodatabase/libsql) (SQLite). Single process. File-based storage. **Ed25519 keypair auth** (anonymous-first). Supabase JS v2 compatible API. Ships as a single binary.
+Built on [Bun](https://bun.sh) + [libSQL](https://github.com/tursodatabase/libsql) (SQLite). Single process. File-based storage. Brute-force **vector search**. **Ed25519 keypair auth** (anonymous-first). Supabase JS v2 compatible API. Ships as a single binary.
 
 **[Documentation](https://anentrypoint.github.io/busybase/docs.html)** · **[Website](https://anentrypoint.github.io/busybase/)** · **[Releases](https://github.com/AnEntrypoint/busybase/releases)**
 
@@ -21,6 +21,7 @@ Built on [Bun](https://bun.sh) + [libSQL](https://github.com/tursodatabase/libsq
 | Supabase JS v2 compatible | ✅ | ✅ | ❌ |
 | Single binary deploy | ✅ | ❌ | ✅ |
 | No Docker required | ✅ | ❌ | ✅ |
+| Vector search | Yes (brute-force) | Partial (pgvector) | No |
 | Ed25519 keypair auth | ✅ | ❌ | ❌ |
 | Anonymous-first auth | ✅ | ⚠️ anon key | ❌ |
 | File-based storage | ✅ | ❌ | ✅ |
@@ -56,6 +57,9 @@ await db.from("todos").insert({ title: "Buy milk", done: false });
 // Query
 const { data } = await db.from("todos").select("*").eq("done", false);
 
+// Vector search
+await db.from("docs").insert({ text: "Bun is fast", vector: [0.9, 0.1, 0.0] });
+const { data: results } = await db.from("docs").select("*").vec([0.85, 0.1, 0.0], 5);
 ```
 
 ```sh
@@ -143,8 +147,6 @@ await db.from("todos").update({ done: true }).eq("id", "abc");
 await db.from("todos").delete().eq("done", true);
 ```
 
-Table and column names are quoted in generated SQL, so a name that collides with a SQL reserved word (e.g. a table called `case`) works without a syntax error. Filter comparisons are numeric-aware: a filter value that looks like a number (e.g. `.gte("created_at", "0")`) matches both text-stored and native numeric-affinity columns, instead of only matching text.
-
 ### Filter operators
 
 | Method | SQL |
@@ -173,6 +175,29 @@ Table and column names are quoted in generated SQL, so a name that collides with
 | `.count("exact")` | Add `count` + `Content-Range` header |
 | `.single()` | Return object (error if 0 rows) |
 | `.maybeSingle()` | Return object or null (no error) |
+| `.vec(embedding, limit)` | Vector similarity search |
+
+---
+
+## Vector Search
+
+```ts
+// Insert with vectors
+await db.from("articles").insert([
+  { title: "Cats article", vector: [0.9, 0.1, 0.0, 0.0] },
+  { title: "Dogs article", vector: [0.1, 0.9, 0.0, 0.0] },
+]);
+
+// Search by similarity (returns _distance field)
+const { data } = await db.from("articles").select("*").vec([0.85, 0.15, 0.0, 0.0], 5);
+// data[0].title === "Cats article"
+// data[0]._distance === 0.02...
+
+// Combine with filters
+await db.from("articles").select("*").vec([...], 10).eq("category", "pets");
+```
+
+Works with any embedding model — OpenAI, Ollama, Cohere, local models, etc.
 
 ---
 
@@ -331,6 +356,7 @@ busybase insert todos '{"title":"Buy milk"}'
 busybase query  todos done=false
 busybase update todos '{"done":"true"}' title=Buy\ milk
 busybase delete todos done=true
+busybase vec embeddings '[1,0,0,0]' 5    # Vector search
 ```
 
 ---
@@ -340,14 +366,17 @@ busybase delete todos done=true
 | Variable | Default | Description |
 |---|---|---|
 | `BUSYBASE_PORT` | `54321` | HTTP port |
-| `BUSYBASE_DIR` | `busybase_data` | Data directory (SQLite file stored as `<dir>/db.sqlite`) |
+| `BUSYBASE_DIR` | `busybase_data` | Data directory (`db.sqlite` file) |
 | `BUSYBASE_URL` | `http://localhost:54321` | Public URL (used in reset email links) |
+| `BUSYBASE_CORS_ORIGIN` | `*` | CORS origin header |
+| `BUSYBASE_STUDIO_TOKEN` | — | When set, gates all `/studio*` routes behind a token check (`?token=` or `Authorization: Bearer`) |
 | `BUSYBASE_HOOKS` | — | Path to your hooks file |
 | `BUSYBASE_SMTP_HOST` | — | SMTP hostname |
 | `BUSYBASE_SMTP_PORT` | `587` | SMTP port |
 | `BUSYBASE_SMTP_USER` | — | SMTP username |
 | `BUSYBASE_SMTP_PASS` | — | SMTP password |
 | `BUSYBASE_SMTP_FROM` | SMTP_USER | From address |
+| `BUSYBASE_MAX_BODY_SIZE` | `10485760` (10MB) | Max request body size in bytes |
 
 ---
 
@@ -365,70 +394,13 @@ Download from [Releases](https://github.com/AnEntrypoint/busybase/releases).
 
 ---
 
-## Embedded mode + Pluggable backends
-
-`busybase/embedded` runs the full server logic in-process — no HTTP, no socket. Same Supabase JS v2 surface as the network SDK, just bound directly to the storage backend.
-
-```ts
-import { createEmbedded } from "busybase/embedded";
-
-const bb = await createEmbedded({ dir: "busybase_data" });
-const { data } = await bb.from("todos").insert({ title: "Buy milk" });
-```
-
-### Backend registry
-
-The default backend is libSQL. Other backends register a factory that returns any object implementing `@libsql/client`'s `Client` interface — the same `execute({sql, args})` shape every busybase query already uses.
-
-```ts
-import { registerBackend, createEmbedded } from "busybase/embedded";
-
-// Register a custom backend (any sql.js / WASM / remote shim works)
-registerBackend("sqljs", async ({ url }) => {
-  const { createClient } = await import("./libsql-sqljs.js");
-  return createClient({ url });
-});
-
-// Use it
-const bb = await createEmbedded({ backend: "sqljs", url: "file:appdb" });
-await bb.from("notes").insert({ body: "running entirely in the browser" });
-```
-
-Why this matters: the [thebird](https://github.com/AnEntrypoint/thebird) browser-native web-OS ships a `@libsql/client`-shape adapter over sql.js (`docs/libsql-sqljs.js`). Registering it as a busybase backend gives thebird a full Supabase-compatible DB **inside the browser** — anonymous-first auth, REST-style filters, realtime subscriptions, hooks — without any server.
-
-### `EmbeddedConfig`
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `dir` | `string` | `"busybase_data"` | Storage directory (libsql backend only — `mkdirSync` runs only when `backend === "libsql"`) |
-| `hooks` | `Hooks` | `{}` | Optional hooks file shape — see [Hooks](#hooks) |
-| `backend` | `string` | `"libsql"` | Registered backend name |
-| `url` | `string` | `file:${dir}/db.sqlite` | Override the connection URL passed to the backend factory |
-
-`registerBackend(name, factory)` is process-global and idempotent on the same name. Calling `createEmbedded({ backend })` with an unknown name throws `busybase: unknown backend '<name>'`.
-
-### Closing an embedded client
-
-`createEmbedded()` returns a `close()` method that releases the underlying libSQL client:
-
-```ts
-const bb = await createEmbedded({ dir: "busybase_data" });
-// ... use bb ...
-bb.close();
-```
-
-Call `close()` before creating a second embedded client against the same database file in the same process — without it, the new client opens a second native handle onto an already-open file instead of reusing or replacing the first. `close()` degrades to a no-op on backends with no local file handle to release (e.g. a remote or plugkit backend).
-
-**Windows limitation:** the native libSQL binding does not release its OS-level file lock synchronously when `close()` is called while the owning process keeps running — removing the database directory immediately after `close()` in the same process still fails with `EPERM`, even with a short retry-with-backoff. The lock only clears once the owning process actually exits; a separate process can remove the directory cleanly right after. A per-test harness that needs the file removable in the same still-running process should run each isolated test in its own child process rather than relying on `close()` alone.
-
----
-
 ## Architecture
 
 - **Runtime:** [Bun](https://bun.sh) — native TypeScript, sub-ms startup, single binary compilation
-- **Storage:** [libSQL](https://github.com/tursodatabase/libsql) — SQLite-compatible, file-based, `cp -r busybase_data` to backup. Default backend; swap via `registerBackend()` for sql.js / wasm / remote engines.
+- **Storage:** [libSQL](https://github.com/tursodatabase/libsql) (SQLite) — single `db.sqlite` file, no server process, `cp -r` to backup
 - **Auth:** Ed25519 via WebCrypto (zero deps) + bcrypt via `Bun.password`
-- **Sessions:** UUID tokens, 7-day expiry, stored in `_sessions` table
+- **Sessions:** UUID tokens, 7-day expiry, stored in the `_sessions` table
+- **Vector search:** brute-force cosine similarity over a JSON-encoded `vector` column — rows without a vector are excluded from results, not padded with a sentinel
 - **CLI = SDK = Server** — the CLI uses the real SDK, making `busybase test` a true e2e test runner
 
 ---

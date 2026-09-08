@@ -1,3 +1,7 @@
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 export async function render(container) {
   let users = [], email = '', password = '', message = '';
 
@@ -12,7 +16,7 @@ export async function render(container) {
     container.innerHTML = `
       <div>
         <div style="font-size:20px;font-weight:700;margin-bottom:16px">Users</div>
-        ${message ? `<div style="padding:8px 12px;background:${message.startsWith('Error')?'#fee2e2':'#d1fae5'};border-radius:6px;margin-bottom:12px;font-size:13px">${message}</div>` : ''}
+        ${message ? `<div style="padding:8px 12px;background:${message.startsWith('Error')?'#fee2e2':'#d1fae5'};border-radius:6px;margin-bottom:12px;font-size:13px">${esc(message)}</div>` : ''}
         <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:24px">
           <thead><tr style="background:#f9fafb">
             <th style="text-align:left;padding:8px;border:1px solid #e5e7eb">ID</th>
@@ -23,10 +27,10 @@ export async function render(container) {
           <tbody>
             ${users.length === 0 ? '<tr><td colspan="4" style="padding:12px 8px;color:#6b7280;border:1px solid #e5e7eb">No users found</td></tr>' :
               users.map(u => `<tr>
-                <td style="padding:8px;border:1px solid #e5e7eb;font-family:monospace;font-size:11px">${u.id||''}</td>
-                <td style="padding:8px;border:1px solid #e5e7eb">${u.email||''}</td>
-                <td style="padding:8px;border:1px solid #e5e7eb">${u.role||'authenticated'}</td>
-                <td style="padding:8px;border:1px solid #e5e7eb">${u.created||''}</td>
+                <td style="padding:8px;border:1px solid #e5e7eb;font-family:monospace;font-size:11px">${esc(u.id)}</td>
+                <td style="padding:8px;border:1px solid #e5e7eb">${esc(u.email)}</td>
+                <td style="padding:8px;border:1px solid #e5e7eb">${esc(u.role||'authenticated')}</td>
+                <td style="padding:8px;border:1px solid #e5e7eb">${esc(u.created)}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -35,12 +39,12 @@ export async function render(container) {
           <div style="font-weight:600;margin-bottom:12px">Create User</div>
           <div style="margin-bottom:8px">
             <label style="display:block;font-size:13px;margin-bottom:4px">Email</label>
-            <input id="auth-email" type="email" value="${email}" placeholder="user@example.com"
+            <input id="auth-email" type="email" value="${esc(email)}" placeholder="user@example.com"
               style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:6px;font-size:14px;box-sizing:border-box" />
           </div>
           <div style="margin-bottom:12px">
             <label style="display:block;font-size:13px;margin-bottom:4px">Password</label>
-            <input id="auth-password" type="password" value="${password}" placeholder="••••••••"
+            <input id="auth-password" type="password" value="${esc(password)}" placeholder="••••••••"
               style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:6px;font-size:14px;box-sizing:border-box" />
           </div>
           <button id="auth-submit"

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BusyBase Documentation</title>
-<meta name="description" content="Full documentation for BusyBase — REST API, Auth, Hooks, SDK, CLI, and Self-hosting.">
+<meta name="description" content="Full documentation for BusyBase — REST API, Auth, Vector Search, Hooks, SDK, CLI, and Self-hosting.">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/typescript.min.js"></script>
@@ -614,6 +614,7 @@
     <div class="sidebar-section">
       <div class="sidebar-section-label">Features</div>
       <ul class="sidebar-items">
+        <li><a href="#vector-search">Vector Search</a></li>
         <li><a href="#realtime">Realtime (WebSocket)</a></li>
         <li><a href="#studio">Studio UI</a></li>
         <li><a href="#embedded">Embedded Mode</a></li>
@@ -665,7 +666,7 @@
       <h1 class="doc-title">BusyBase Docs</h1>
       <p class="doc-intro">
         BusyBase is a minimal, self-hosted backend built on <strong>Bun</strong> and <strong>libSQL</strong> (SQLite).
-        It provides a Supabase JS v2-compatible API, Ed25519 keypair authentication,
+        It provides a Supabase JS v2-compatible API, Ed25519 keypair authentication, vector search,
         and a pluggable hooks system — with zero config, no Docker, and no external database process.
       </p>
 
@@ -680,9 +681,10 @@
           <thead><tr><th>Property</th><th>Value</th></tr></thead>
           <tbody>
             <tr><td>Runtime</td><td>Bun (TypeScript, zero transpile)</td></tr>
-            <tr><td>Storage</td><td>libSQL — SQLite-compatible, single file, no server process</td></tr>
+            <tr><td>Storage</td><td>libSQL (SQLite) — single file, no server process</td></tr>
             <tr><td>Auth</td><td>Ed25519 keypair (WebCrypto) + email/password (bcrypt via Bun.password)</td></tr>
-            <tr><td>Sessions</td><td>UUID tokens, 7-day expiry, stored in <code>_sessions</code> table</td></tr>
+            <tr><td>Sessions</td><td>UUID tokens, 7-day expiry, stored in the <code>_sessions</code> table</td></tr>
+            <tr><td>Vector search</td><td>Brute-force cosine similarity — store a <code>vector</code> field, query with <code>.vec(embedding, limit)</code></td></tr>
             <tr><td>Response shape</td><td><code>&#123; data, error &#125;</code> — Supabase v2 compatible throughout</td></tr>
             <tr><td>Default port</td><td>54321 (same as Supabase local dev)</td></tr>
             <tr><td>License</td><td>MIT</td></tr>
@@ -744,7 +746,14 @@ await db.from("todos").insert({ title: "Learn BusyBase", done: false });
 // Query
 const { data: todos } = await db.from("todos").select("*").eq("done", false);
 console.log(todos); // [{ id: "...", title: "Learn BusyBase", done: "false" }]
-</code></pre>
+
+// Vector search
+await db.from("docs").insert([
+  { text: "Bun is fast", vector: [0.9, 0.1] },
+  { text: "SQLite rocks", vector: [0.1, 0.9] },
+]);
+const { data: results } = await db.from("docs").select("*").vec([0.85, 0.15], 1);
+// results[0].text === "Bun is fast"</code></pre>
 
 <pre><code class="language-bash"># 3. Test everything works
 bunx busybase test
@@ -769,7 +778,7 @@ bunx busybase test
             <tr>
               <td class="env-name">BUSYBASE_DIR</td>
               <td><code>busybase_data</code></td>
-              <td>Directory where the SQLite database file is stored (<code>&lt;dir&gt;/db.sqlite</code>)</td>
+              <td>Directory where the SQLite database file is stored</td>
             </tr>
             <tr>
               <td class="env-name">BUSYBASE_URL</td>
@@ -780,6 +789,21 @@ bunx busybase test
               <td class="env-name">BUSYBASE_HOOKS</td>
               <td>—</td>
               <td>Path to your hooks file (e.g. <code>./hooks.ts</code>)</td>
+            </tr>
+            <tr>
+              <td class="env-name">BUSYBASE_CORS_ORIGIN</td>
+              <td><code>*</code></td>
+              <td>CORS <code>Access-Control-Allow-Origin</code> header value</td>
+            </tr>
+            <tr>
+              <td class="env-name">BUSYBASE_STUDIO_TOKEN</td>
+              <td>—</td>
+              <td>When set, gates all <code>/studio*</code> routes behind a token check (<code>?token=</code> query param or <code>Authorization: Bearer</code> header)</td>
+            </tr>
+            <tr>
+              <td class="env-name">BUSYBASE_MAX_BODY_SIZE</td>
+              <td><code>10485760</code> (10MB)</td>
+              <td>Max request body size in bytes</td>
             </tr>
           </tbody>
         </table>
@@ -868,6 +892,7 @@ BUSYBASE_SMTP_FROM=noreply@myapp.com</code></pre>
             <tr><td><code>limit</code></td><td><code>limit=20</code></td><td>Max rows to return (default: 1000)</td></tr>
             <tr><td><code>offset</code></td><td><code>offset=40</code></td><td>Skip N rows</td></tr>
             <tr><td><code>count</code></td><td><code>count=exact</code></td><td>Include <code>count</code> in response + <code>Content-Range</code> header</td></tr>
+            <tr><td><code>vec</code></td><td><code>vec=[0.9,0.1]</code></td><td>Vector search — JSON array, returns sorted by <code>_distance</code></td></tr>
             <tr><td><code>eq.col</code></td><td><code>eq.done=false</code></td><td>Filter: column equals value</td></tr>
             <tr><td><code>neq.col</code></td><td><code>neq.status=draft</code></td><td>Filter: not equal</td></tr>
             <tr><td><code>gt.col</code></td><td><code>gt.score=80</code></td><td>Filter: greater than</td></tr>
@@ -883,7 +908,6 @@ BUSYBASE_SMTP_FROM=noreply@myapp.com</code></pre>
           </tbody>
         </table>
       </div>
-      <p>Table and column names are quoted in generated SQL, so a name colliding with a SQL reserved word (e.g. a table called <code>case</code>) works without a syntax error. Filter comparisons are numeric-aware: a value that looks like a number (e.g. <code>gte.created_at=0</code>) matches both text-stored and native numeric-affinity columns, instead of only matching text.</p>
 
       <h3>Request headers</h3>
       <div class="table-wrap">
@@ -915,6 +939,8 @@ curl -X PATCH "http://localhost:54321/rest/v1/todos?eq.title=Buy%20milk" \
 # Delete
 curl -X DELETE "http://localhost:54321/rest/v1/todos?eq.done=true"
 
+# Vector search
+curl "http://localhost:54321/rest/v1/docs?vec=[0.9,0.1,0.0]&limit=5"
 
 # With count
 curl "http://localhost:54321/rest/v1/todos?count=exact"
@@ -1169,6 +1195,76 @@ curl -X POST http://localhost:54321/auth/v1/verify \
       </div>
     </div>
 
+    <!-- ── Vector Search ── -->
+    <div class="doc-section" id="vector-search">
+      <h2>Vector Search</h2>
+      <p>Every table can store a <code>vector</code> field alongside regular data. BusyBase computes brute-force cosine similarity in-process to find similar rows — there is no ANN index, so search time scales linearly with row count. Rows without a vector (or whose vector length doesn't match the query embedding) are excluded from results, never padded with a sentinel.</p>
+
+      <h3>Insert with vectors</h3>
+<pre><code class="language-typescript">// Insert rows with a "vector" field
+await db.from("articles").insert([
+  { title: "Cats",   topic: "pets",  vector: [0.9, 0.1, 0.0, 0.0] },
+  { title: "Dogs",   topic: "pets",  vector: [0.1, 0.9, 0.0, 0.0] },
+  { title: "Python", topic: "code",  vector: [0.0, 0.0, 0.9, 0.1] },
+  { title: "Rust",   topic: "code",  vector: [0.0, 0.0, 0.1, 0.9] },
+]);
+
+// Mixed tables are fine — non-vector rows just won't appear in .vec() results
+await db.from("articles").insert({ title: "No vector here", body: "..." });</code></pre>
+
+      <h3>Vector search</h3>
+<pre><code class="language-typescript">// .vec(embedding, limit) — sorted by cosine similarity
+const { data } = await db.from("articles").select("*").vec([0.85, 0.15, 0.0, 0.0], 3);
+// data[0].title === "Cats"       (_distance ~0.01)
+// data[1].title === "Dogs"       (_distance ~0.15)
+// data[2].title === "Python"     (_distance ~0.95)
+
+// Each result includes _distance — lower = more similar
+console.log(data[0]._distance);  // number</code></pre>
+
+      <h3>Combine with filters</h3>
+<pre><code class="language-typescript">// Vector search with topic filter
+const { data } = await db.from("articles")
+  .select("title,topic")
+  .vec([0.85, 0.15, 0.0, 0.0], 5)
+  .eq("topic", "pets");
+// Only returns pet-related articles, sorted by similarity</code></pre>
+
+      <h3>Using real embeddings (OpenAI)</h3>
+<pre><code class="language-typescript">import OpenAI from "openai";
+const openai = new OpenAI();
+
+// Generate and store embedding
+const text = "How to train a golden retriever";
+const resp = await openai.embeddings.create({
+  model: "text-embedding-3-small",
+  input: text,
+});
+const embedding = resp.data[0].embedding; // 1536-dimensional float array
+
+await db.from("knowledge").insert({
+  text,
+  source: "guide.pdf",
+  vector: embedding,
+});
+
+// Search by semantic similarity
+const query = "tips for dog training";
+const qResp = await openai.embeddings.create({
+  model: "text-embedding-3-small",
+  input: query,
+});
+const { data: results } = await db.from("knowledge")
+  .select("text,source")
+  .vec(qResp.data[0].embedding, 5);
+// results[0] is the most semantically similar document</code></pre>
+
+      <h3>REST API for vector search</h3>
+<pre><code class="language-bash"># GET /rest/v1/:table?vec=[...]&limit=5
+curl "http://localhost:54321/rest/v1/articles?vec=%5B0.9%2C0.1%2C0.0%2C0.0%5D&limit=3"
+# Returns sorted by _distance ascending</code></pre>
+    </div>
+
     <!-- ── Realtime (WebSocket) ── -->
     <div class="doc-section" id="realtime">
       <h2>Realtime (WebSocket)</h2>
@@ -1254,7 +1350,7 @@ db.removeAllChannels();</code></pre>
             <tr><td><strong>Tables</strong></td><td>Browse all tables, view rows, inline edit cells, add/delete rows</td></tr>
             <tr><td><strong>Auth</strong></td><td>List users from <code>_users</code>, create new users via signup form</td></tr>
             <tr><td><strong>Realtime</strong></td><td>Live event log — see INSERT/UPDATE/DELETE events in real time via WebSocket</td></tr>
-            <tr><td><strong>SQL</strong></td><td>Query panel with table dropdown and SQL WHERE filter input</td></tr>
+            <tr><td><strong>SQL</strong></td><td>Query panel with table dropdown and filter syntax input</td></tr>
             <tr><td><strong>Settings</strong></td><td>View current config (env vars, no secrets exposed) and SDK usage snippet</td></tr>
           </tbody>
         </table>
@@ -1269,12 +1365,11 @@ db.removeAllChannels();</code></pre>
             <tr><td><code>GET /studio/*.js</code></td><td>Serves panel JavaScript modules</td></tr>
             <tr><td><code>GET /studio/config</code></td><td>Returns <code>{ BUSYBASE_DIR, BUSYBASE_PORT, BUSYBASE_CORS_ORIGIN }</code> (no secrets)</td></tr>
             <tr><td><code>GET /studio/api/tables</code></td><td>Returns <code>{ data: string[] }</code> of all table names</td></tr>
-            <tr><td><code>GET /studio/api/users</code></td><td>Returns <code>{ data: User[] }</code> from <code>_users</code> (password hash and pubkey stripped)</td></tr>
           </tbody>
         </table>
       </div>
 
-      <div class="callout warn">
+      <div class="callout warning">
         <div class="callout-title">Security note</div>
         Studio does not require authentication. In production, restrict access via a reverse proxy or firewall.
       </div>
@@ -1283,7 +1378,7 @@ db.removeAllChannels();</code></pre>
     <!-- ── Embedded Mode ── -->
     <div class="doc-section" id="embedded">
       <h2>Embedded Mode</h2>
-      <p>BusyBase can run entirely in-process with no HTTP server. Use <code>createEmbedded()</code> for zero-config local usage — same API as the HTTP SDK but operating directly on a local SQLite file via libSQL.</p>
+      <p>BusyBase can run entirely in-process with no HTTP server. Use <code>createEmbedded()</code> for zero-config local usage — same API as the HTTP SDK but operating directly on libSQL.</p>
 
       <h3>Setup</h3>
 <pre><code class="language-typescript">import { createEmbedded } from "busybase/embedded";
@@ -1302,38 +1397,9 @@ const { data: session } = await db.auth.signInWithPassword({
 
       <h3>Configuration</h3>
 <pre><code class="language-typescript">interface EmbeddedConfig {
-  dir?: string;    // Data directory (default: "busybase_data") — libsql backend only
+  dir?: string;    // Data directory (default: "busybase_data")
   hooks?: Hooks;   // Hook functions (same interface as BUSYBASE_HOOKS file)
-  backend?: string; // Registered backend name (default: "libsql")
-  url?: string;    // Override connection URL passed to backend factory
 }</code></pre>
-
-      <h3>Pluggable backends</h3>
-      <p>The default backend is libSQL. Register other backends via <code>registerBackend(name, factory)</code> — the factory returns any object implementing <code>@libsql/client</code>'s <code>Client</code> interface. This lets busybase run on sql.js, remote sqlite-over-HTTP, or any custom storage exposing <code>execute({sql, args})</code>.</p>
-<pre><code class="language-typescript">import { registerBackend, createEmbedded } from "busybase/embedded";
-
-// Example: sql.js in browser (zero server, zero native deps)
-registerBackend("sqljs", async ({ url }) => {
-  const { createClient } = await import("./libsql-sqljs.js");
-  return createClient({ url });
-});
-
-const db = await createEmbedded({ backend: "sqljs", url: "file:appdb" });
-await db.from("notes").insert({ body: "hello from a browser tab" });</code></pre>
-      <p>The <a href="https://github.com/AnEntrypoint/thebird">thebird</a> browser-native web-OS uses this to host busybase entirely in-browser — each instance gets its own IndexedDB-backed sqlite blob via vendored sql.js. No server, full Supabase JS v2 surface.</p>
-      <p>Unknown backend names throw <code>busybase: unknown backend '&lt;name&gt;'</code>. <code>mkdirSync</code> only runs for the libsql backend so non-disk backends work cleanly.</p>
-
-      <h3>Closing an embedded client</h3>
-      <p><code>createEmbedded()</code> returns a <code>close()</code> method that releases the underlying libSQL client:</p>
-<pre><code class="language-typescript">const db = await createEmbedded({ dir: "./my-data" });
-// ... use db ...
-db.close();</code></pre>
-      <p>Call <code>close()</code> before creating a second embedded client against the same database file in the same process — without it, the new client opens a second native handle onto an already-open file instead of reusing or replacing the first. <code>close()</code> degrades to a no-op on backends with no local file handle to release (e.g. a remote or plugkit backend).</p>
-
-      <div class="callout warn">
-        <div class="callout-title">Windows limitation</div>
-        The native libSQL binding does not release its OS-level file lock synchronously when <code>close()</code> is called while the owning process keeps running — removing the database directory immediately after <code>close()</code> in the same process still fails with <code>EPERM</code>, even with a short retry-with-backoff. The lock only clears once the owning process actually exits; a separate process can remove the directory cleanly right after. A per-test harness that needs the file removable in the same still-running process should run each isolated test in its own child process rather than relying on <code>close()</code> alone.
-      </div>
 
       <h3>Realtime in embedded mode</h3>
       <p>Realtime events fire via Node.js <code>EventEmitter</code> instead of WebSocket:</p>
@@ -1857,7 +1923,7 @@ await db.from("todos").insert([{ title: "A" }, { title: "B" }]);</code></pre>
 <pre><code class="language-typescript">const { data } = await db.from("todos").update({ done: true }).eq("id", "abc");</code></pre>
 
       <h4>from(table).upsert(data)</h4>
-      <p>Alias for <code>insert</code> in BusyBase. Inserts new rows (no true SQL UPSERT).</p>
+      <p>Checks for an existing row by <code>id</code> and issues an update or insert accordingly (application-level upsert; SQLite's native <code>INSERT ... ON CONFLICT</code> is not used).</p>
 
       <h4>from(table).delete()</h4>
       <p>Delete rows matching a filter. Must chain at least one filter method.</p>
@@ -1905,6 +1971,7 @@ await db.from("todos").insert([{ title: "A" }, { title: "B" }]);</code></pre>
             <tr><td><code>.single()</code></td><td>Expect exactly one row — returns object (not array). Error if 0 or multiple rows.</td></tr>
             <tr><td><code>.maybeSingle()</code></td><td>Return first row as object, or <code>null</code> if no rows. No error on empty.</td></tr>
             <tr><td><code>.select(cols)</code></td><td>Override column selection on a query chain</td></tr>
+            <tr><td><code>.vec(embedding, limit)</code></td><td>Vector similarity search — returns rows sorted by <code>_distance</code> ascending</td></tr>
           </tbody>
         </table>
       </div>
@@ -1933,7 +2000,7 @@ const { data, count } = await db.from("posts")
 BUSYBASE_PORT=8080 BUSYBASE_DIR=./data BUSYBASE_HOOKS=./hooks.ts busybase serve</code></pre>
 
       <h3>busybase test</h3>
-      <p>Run the full SDK end-to-end test suite against a live server. Tests all auth flows, CRUD, filters, modifiers, and HTTP compatibility headers.</p>
+      <p>Run the full SDK end-to-end test suite against a live server. Tests all auth flows, CRUD, filters, modifiers, vector search, and HTTP compatibility headers.</p>
 <pre><code class="language-bash">busybase test
 BUSYBASE_URL=http://localhost:54321 busybase test</code></pre>
 
@@ -1965,6 +2032,9 @@ busybase query todos done=false status=active</code></pre>
 <pre><code class="language-bash">busybase delete todos done=true
 busybase delete todos title=Buy\ milk</code></pre>
 
+      <h3>busybase vec &lt;table&gt; &lt;json-vec&gt; [limit]</h3>
+<pre><code class="language-bash">busybase vec articles '[0.9,0.1,0.0,0.0]' 5
+# → sorted by _distance, top 5 results</code></pre>
     </div>
 
     <!-- ── Self-hosting ── -->
@@ -2087,6 +2157,40 @@ export const beforeInsert = (table, rows) => {
   }
 };</code></pre>
 
+      <h3>Semantic search API</h3>
+<pre><code class="language-typescript">import BB from "busybase";
+import OpenAI from "openai";
+
+const db = BB("http://localhost:54321", "local");
+const openai = new OpenAI();
+
+// Index documents
+async function indexDoc(text: string, metadata: object) {
+  const { data } = await openai.embeddings.create({
+    model: "text-embedding-3-small", input: text
+  });
+  await db.from("docs").insert({
+    text,
+    ...metadata,
+    vector: data[0].embedding,
+  });
+}
+
+// Search
+async function search(query: string, limit = 5) {
+  const { data: embed } = await openai.embeddings.create({
+    model: "text-embedding-3-small", input: query
+  });
+  const { data } = await db.from("docs")
+    .select("text,title,url")
+    .vec(embed[0].embedding, limit);
+  return data;
+}
+
+// Usage
+await indexDoc("Bun is a fast JavaScript runtime", { title: "About Bun", url: "/bun" });
+const results = await search("fast JS runtimes");
+// results[0].title === "About Bun"</code></pre>
 
       <h3>Supabase migration</h3>
 <pre><code class="language-typescript">// Before (Supabase)

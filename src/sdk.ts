@@ -47,39 +47,30 @@ const BB = (url: string, key: string) => {
 
     // Sign in with an existing private key (or a freshly generated one)
     signIn: async (privkeyB64?: string): Promise<any> => {
-      try {
-        let privkey = privkeyB64 ?? store.getItem("_bb_privkey");
-        let pubkey = store.getItem("_bb_pubkey");
+      let privkey = privkeyB64 ?? store.getItem("_bb_privkey");
+      let pubkey = store.getItem("_bb_pubkey");
 
-        if (!privkey) {
-          // First time — generate, persist
-          const kp = await genKeypair();
-          privkey = kp.privkey;
-          pubkey = kp.pubkey;
-          store.setItem("_bb_privkey", privkey);
-          store.setItem("_bb_pubkey", pubkey);
-        } else if (!pubkey) {
-          // Have privkey from restore, need to derive pubkey
-          // Re-import and re-export to get raw public key
-          const privCrypto = await crypto.subtle.importKey("pkcs8", unb64(privkey), { name: "Ed25519" }, true, ["sign"]);
-          // Can't directly export public from private in WebCrypto — generate pair is the only way
-          // So we store pubkey alongside privkey; if missing, user must re-generate
-          return { data: null, error: { message: "Pubkey missing — call keypair.restore(privkey, pubkey)" } };
-        }
-
-        // Get nonce
-        const nonceRes = await req("auth/v1/keypair");
-        if (nonceRes.error) return nonceRes;
-        const nonce = nonceRes.data.nonce;
-
-        // Sign nonce
-        const signature = await sign(privkey, nonce);
-        const r = await req("auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature }) });
-        if (r.data?.session) { setSession_(r.data.session); store.setItem("_bb_privkey", privkey); store.setItem("_bb_pubkey", pubkey!); emit("SIGNED_IN", session); }
-        return r;
-      } catch (e: any) {
-        return { data: null, error: { message: e?.message || "Keypair sign-in failed" } };
+      if (!privkey) {
+        // First time — generate, persist
+        const kp = await genKeypair();
+        privkey = kp.privkey;
+        pubkey = kp.pubkey;
+        store.setItem("_bb_privkey", privkey);
+        store.setItem("_bb_pubkey", pubkey);
+      } else if (!pubkey) {
+        return { data: null, error: { message: "Pubkey missing — call keypair.restore(privkey, pubkey)" } };
       }
+
+      // Get nonce
+      const nonceRes = await req("auth/v1/keypair");
+      if (nonceRes.error) return nonceRes;
+      const nonce = nonceRes.data.nonce;
+
+      // Sign nonce
+      const signature = await sign(privkey, nonce);
+      const r = await req("auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature }) });
+      if (r.data?.session) { setSession_(r.data.session); store.setItem("_bb_privkey", privkey); store.setItem("_bb_pubkey", pubkey!); emit("SIGNED_IN", session); }
+      return r;
     },
 
     // Restore from a saved backup key (privkey + pubkey pair)
@@ -101,7 +92,7 @@ const BB = (url: string, key: string) => {
 
   // --- Query builder ---
   const Q = (table: string, method?: string, body?: any) => {
-    const q = { filters: [] as string[], order: "", limit: 0, offset: 0, select: "*", count: "" };
+    const q = { filters: [] as string[], order: "", limit: 0, offset: 0, select: "*", vec: "", count: "" };
     let _single = false, _maybeSingle = false;
 
     const qs = () => {
@@ -109,6 +100,7 @@ const BB = (url: string, key: string) => {
       if (q.order) p.push(`order=${q.order}`);
       if (q.limit) p.push(`limit=${q.limit}`);
       if (q.offset) p.push(`offset=${q.offset}`);
+      if (q.vec) p.push(`vec=${encodeURIComponent(q.vec)}`);
       if (q.count) p.push(`count=${q.count}`);
       return p.join("&");
     };
@@ -151,6 +143,7 @@ const BB = (url: string, key: string) => {
       count:       (type: "exact" | "planned" | "estimated" = "exact") => (q.count = type, b),
       single:      () => (_single = true, b),
       maybeSingle: () => (_maybeSingle = true, b),
+      vec:         (embedding: number[], limit = 10) => (q.vec = JSON.stringify(embedding), q.limit = limit, b),
       then:        (res: any, rej: any) => resolve().then(res, rej),
     };
     return b;
@@ -206,7 +199,7 @@ const BB = (url: string, key: string) => {
       return Promise.resolve({ data: { session: s }, error: null });
     },
 
-    resetPasswordForEmail: (_email: string) => Promise.resolve({ data: {}, error: null }),
+    resetPasswordForEmail: (email: string) => req("auth/v1/recover", { method: "POST", body: JSON.stringify({ email }) }),
 
     onAuthStateChange: (cb: (event: string, session: any) => void) => {
       authListeners.push(cb);

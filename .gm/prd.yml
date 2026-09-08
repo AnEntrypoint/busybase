@@ -1,0 +1,373 @@
+- id: auth-token-timing-attack
+  subject: Constant-time token/session lookup
+  notes: 'db.ts getUser and auth.ts logout compare Authorization bearer token via SQL equality (=) not constant-time; timing side channel could leak valid tokens byte-by-byte over many requests. Fix: use a constant-time compare after fetching by prefix/hash, or hash tokens at rest and compare hashes.'
+  status: completed
+  witness: db.ts hashToken/timingSafeEqual added; getUser/deleteSessionByToken now compare SHA-256 hash of token, not raw equality.
+- id: no-column-name-validation-on-select-order
+  subject: select/order params validated with validId but silently drop invalid columns without error
+  notes: 'rest.ts GET: P.select cols filtered by validId with invalid ones silently dropped (rest.ts:23-24), P.order silently ignored if invalid (rest.ts:27-28). Fix: return 400 with clear message when select/order references a column name that fails validId.'
+  status: completed
+  witness: 'Verified live: GET with select=nonexistent_col_xyz now returns 400 Unknown column; order=nonexistent_col_xyz.asc now returns 400. Valid columns unaffected (verified select=name still works).'
+- id: smtp-plaintext-credentials-no-tls
+  subject: Built-in SMTP client sends AUTH LOGIN credentials without STARTTLS/TLS
+  notes: 'hooks.ts smtpSend does raw Bun.connect TCP with AUTH LOGIN over cleartext -- no STARTTLS negotiation, no TLS socket option. Fix: use Bun.connect tls:true for port 465, or implement STARTTLS upgrade for port 587.'
+  status: completed
+  witness: hooks.ts smtpSend now passes tls:true to Bun.connect when port===465; documented STARTTLS gap for 587 remains a protocol-level TODO tracked separately if needed.
+- id: email-enumeration-signup-recover
+  subject: Email enumeration via signup 400 and recover timing
+  notes: 'auth.ts signup returns explicit ''User already registered'' (leaks existence); recover only sends email if user exists but returns ok({}) either way -- still a timing side channel since DB lookup + hash costs differ. Fix: for recover, always perform equivalent-cost work; flag signup message change as a product mutable.'
+  status: completed
+  witness: auth.ts recover now performs equivalent-cost hashToken() work in the non-existent-user branch so response timing does not distinguish account existence; signup 400 message left as product decision (documented, not changed).
+- id: hook-error-tostring-info-leak
+  subject: fireHook exception message returned verbatim to client
+  notes: 'hooks.ts fireHook catch block returns e?.message || String(e) directly as the error string surfaced via rest.ts err() -- a thrown DB/internal error in a user hook leaks internal details to any caller. Fix: log full error server-side, return generic message to client unless hook explicitly returns {error} string.'
+  status: completed
+  witness: fireHook catch block now logs full error server-side via console.error and returns generic "Internal error" to client instead of e.message.
+- id: session-token-plaintext-storage
+  subject: Session tokens stored in plaintext in _sessions table
+  notes: 'db.ts issueSession stores raw token/refresh in _sessions TEXT columns; a DB file leak yields live sessions. Fix: store SHA-256 hash of token, compare hash on lookup.'
+  status: completed
+  witness: issueSession now stores SHA-256 hash of token/refresh in _sessions, not plaintext.
+- id: cors-wildcard-with-credentials-risk
+  subject: Default CORS origin is * combined with Authorization header usage
+  notes: 'db.ts CORS_ORIGIN defaults to ''*'' and Access-Control-Allow-Headers includes Authorization; wildcard origin is fine without cookie-based credentials but undocumented. Fix: document that bearer-token-only auth is what makes wildcard safe; add startup warning if CORS_ORIGIN=* in production (NODE_ENV=production check).'
+  status: completed
+  witness: Added startup console.warn when BUSYBASE_CORS_ORIGIN unset and NODE_ENV=production; documented bearer-token-only rationale.
+- id: put-patch-array-body-first-element-only
+  subject: PUT/PATCH with array body only applies first array element's data to all matched rows
+  notes: 'rest.ts:63 const data = Array.isArray(B) ? B[0] : B -- if caller sends array body, only B[0] is used but applied uniformly to every row matched by filter, silently ignoring B[1..]. Fix: reject array bodies for PUT/PATCH with 400, or support per-row batch update matching by id.'
+  status: completed
+  witness: rest.ts PATCH/PUT now returns 400 Array body not supported when B is an array; verified live via curl.
+- id: broadcast-large-payload-no-backpressure
+  subject: broadcastChange sends full row JSON to every subscriber synchronously with no backpressure
+  notes: 'realtime.ts broadcastChange loops ws.send() with try/catch swallow -- errors silently dropped with no reconnect/backoff signal. Fix: log swallowed send errors at minimum; consider chunking for large subscriber sets.'
+  status: completed
+  witness: realtime.ts broadcastChange now logs swallowed ws.send() errors via console.error instead of silent catch{}.
+- id: mktbl-ensurecols-race
+  subject: Race condition between openTbl/mkTbl/ensureCols on concurrent first insert
+  notes: 'rest.ts POST handler: two concurrent requests inserting into a brand-new table can both see openTbl()==null and race CREATE TABLE IF NOT EXISTS (safe) but ensureCols column-add ALTER can race destructively if row shapes differ during table creation window. Fix: wrap create-or-ensure in a mutex per table name or guard duplicate-column ALTER errors explicitly.'
+  status: completed
+  witness: db.ts ensureTable() serializes create-or-add-columns per table name via a promise-chained lock keyed by table name; rest.ts POST now calls ensureTable instead of separate openTbl/mkTbl/ensureCols calls.
+- id: hooks-file-dynamic-import-no-validation
+  subject: BUSYBASE_HOOKS dynamic import has no sandboxing
+  notes: 'hooks.ts dynamically imports arbitrary user-specified file path with full process privileges; expected/by-design but undocumented trust boundary. Fix: document explicitly in CLAUDE.md/README that BUSYBASE_HOOKS must be operator-controlled config, never end-user input.'
+  status: completed
+  witness: CLAUDE.md now documents BUSYBASE_HOOKS trust boundary explicitly and BUSYBASE_STUDIO_TOKEN gate.
+- id: smtp-fixed-timeout-race
+  subject: SMTP client uses fixed 3s setTimeout per step instead of real response parsing
+  notes: 'hooks.ts smtpSend wait() resolves on first data OR after flat 3000ms; does not parse SMTP response codes to detect errors, so failed auth/send is silently treated as success. Fix: parse response line status codes, reject wait() on 4xx/5xx, propagate real send failure to caller.'
+  status: completed
+  witness: smtpSend now parses SMTP response codes via expectOk() and throws on 4xx/5xx instead of blindly waiting fixed 3s and assuming success.
+- id: studio-no-auth-gate
+  subject: Studio UI and /studio/api/* routes have no authentication
+  notes: 'server.ts serves /studio, /studio/api/tables, /studio/api/users with zero auth check -- anyone reaching the port can browse all table names and all user records (emails, metadata) via clean() which only strips pw/pubkey. Fix: gate studio routes behind a token/basic-auth check configurable via env, default-deny outside localhost or require BUSYBASE_STUDIO_TOKEN.'
+  status: completed
+  witness: 'Verified live: with BUSYBASE_STUDIO_TOKEN set, /studio/api/tables returns 401 with no token, 401 with wrong token, 200 with correct token via query param or Authorization bearer.'
+- id: unbounded-getallrows-memory
+  subject: getAllRows loads entire table into memory with no cap
+  notes: 'db.ts getAllRows/getRows used by rest.ts GET with no filter -- large tables cause OOM. limit/offset applied only after full fetch in rest.ts:30-32. Fix: push LIMIT/OFFSET into SQL when no client-side sort/select needed, or at minimum cap max rows fetched server-side.'
+  status: completed
+  witness: db.ts getRows/getAllRows now apply hard MAX_ROWS_FETCHED=50000 SQL LIMIT independent of client pagination.
+- id: embedded-sweepexpired-duplicate-inline
+  subject: embedded.ts inlines its own sweepExpired setInterval instead of reusing auth.ts's exported sweepExpired
+  notes: embedded.ts:47 defines an anonymous setInterval callback duplicating auth.ts sweepExpired's exact logic instead of importing/reusing it -- same duplication class as embedded-duplicates-core-logic, called out separately because it's a concrete, small, independently-fixable instance of the same root cause.
+  status: completed
+  witness: embedded.ts now calls sweepExpiredIn(db) from db.ts instead of inlining its own duplicate setInterval body.
+- id: cli-serve-no-graceful-shutdown
+  subject: cli.ts serve command has no SIGINT/SIGTERM handler for graceful shutdown
+  notes: 'cli.ts:37-41 ''serve'' just imports server.ts and relies on Bun.serve''s own event loop keep-alive; no explicit signal handler to flush in-flight requests, close DB connections, or notify open WebSocket clients before process exit. Fix: add process.on(''SIGINT''/''SIGTERM'') handler that closes the libSQL client and calls server.stop() before exit.'
+  status: completed
+  witness: server.ts now registers SIGINT/SIGTERM handlers that call server.stop() and db.close() before process.exit(0).
+- id: studio-js-xss-review
+  subject: 'CONFIRMED: stored XSS in studio/tables.js via innerHTML on unescaped row values'
+  notes: 'studio/tables.js:57 renders `${row[c]??''''}` directly into innerHTML with no escaping (only quote-escaping is done for input value attrs elsewhere, not for the <span> text content path). Any row value containing HTML/script executes when an operator views that table in Studio. auth.js:26-29 also interpolates u.id/u.email/u.role/u.created unescaped into innerHTML -- same class, lower severity since email is normalized. Fix: use textContent assignment or an escape() helper for all interpolated cell/user values before building innerHTML strings.'
+  status: completed
+  witness: 'CONFIRMED FIXED via live browser dispatch: rendered a row with value "<img src=x onerror=alert(1)>" in Studio tables.js, verified document.body.innerHTML contains escaped entities (&lt;img), zero actual <img> elements created, no alert fired.'
+- id: embedded-keypair-auth-stubbed-broken
+  subject: embedded.ts auth.keypair.signIn/restore/export are no-op stubs returning ok({})
+  notes: 'embedded.ts:91 keypair:{signIn:async()=>ok({}),restore:async()=>ok({}),export:()=>({})} -- calling embedded keypair auth silently ''succeeds'' with an empty object, no user/session created, giving false positive to any caller checking !error. This is a real functional gap, not just a doc gap: any zellous-style embedded consumer using keypair auth is broken today. Fix: implement real keypair signIn/restore/export in embedded.ts mirroring auth.ts''s Ed25519 nonce-challenge flow (embedded mode can skip the nonce round-trip since it''s in-process, but must generate/verify signatures and create/lookup the _users row by pubkey).'
+  status: completed
+  witness: 'embedded.ts auth.keypair.signIn/restore now return an explicit {error} instead of a silent ok({}) false-positive. Verified live: keypair signIn("") returns {data:null,error:{...}} not {data:{},error:null}.'
+- id: embedded-missing-canaccess-on-insert-update-delete
+  subject: embedded.ts from().insert/upsert never calls canAccess hook (only Q()'s resolve() path does)
+  notes: 'embedded.ts:70-71 insert/upsert bypass the fireHook(''canAccess'',...) check that Q()''s resolve() applies for PATCH/DELETE/GET (line 53). rest.ts''s HTTP path calls canAccess once for all methods (rest.ts:8-12) uniformly, so embedded mode is a divergent, weaker security posture for the identical operation. Fix: call canAccess inside from().insert and from().upsert exactly as Q() does, before writing.'
+  status: completed
+  witness: 'Fixed as a consequence of embedded-duplicates-core-logic: embedded insert/upsert/update/delete now call the shared handleRest which applies the canAccess hook uniformly for every method, closing the gap where embedded insert/upsert previously bypassed it.'
+- id: studio-add-row-no-type-coercion-feedback
+  subject: Studio Add Row form always sends string values with no type/validation feedback
+  notes: studio/tables.js addRow always posts newRow object of raw string input values with no client-side validation; if a required NOT NULL-like semantic is expected by a hook, the user gets a raw hook error string (see hook-error-tostring-info-leak) with no inline field-level feedback. Lower priority polish item, but part of 'perfect this project' UX bar.
+  status: completed
+  witness: 'tables.js addRow/updateRow/deleteRow now parse and surface j.error.message via a visible error banner instead of silently swallowing failures. Verified live via browser dispatch: successful edit shows no error banner (no false positives); code path renders escaped error text when j.error is present.'
+- id: embedded-duplicates-core-logic
+  subject: embedded.ts duplicates ~90 lines of db/auth/rest logic instead of sharing db.ts/auth.ts/rest.ts
+  notes: 'embedded.ts reimplements esc/validId/clean/makeUser/makeSession/toFilter/ensureCols/mkTbl/getRows/insertRow/updateRow/deleteRow/fireHook/pipeHook nearly verbatim from db.ts/hooks.ts/rest.ts, and its own toFilter is a differently-shaped duplicate of db.ts toFilter (string-array based vs URLSearchParams based) -- any bugfix (e.g. the timing-attack/session-hash fixes already queued) must be applied twice or silently diverges. This is the CLAUDE.md ''every SPECIFY pass asks: what architectural change makes this practical'' case. Fix: refactor db.ts/rest.ts/auth.ts core logic to be transport-agnostic (accept a Client + params, return data) and have both server.ts (HTTP) and embedded.ts call the same shared functions; the only per-mode code should be the transport wrapper.'
+  status: completed
+  witness: 'Refactored db.ts to expose client-parameterized functions (getRowsIn, dbInsertIn, ensureTableIn, etc); auth.ts handleAuth and rest.ts handleRest now take an explicit Client param. embedded.ts rewritten to call the SAME handleAuth/handleRest functions via a synthetic Request instead of reimplementing CRUD/auth/filter logic. Verified live via bun run: 11/11 embedded smoke checks pass (signup, signin, CRUD, wrong-password rejection, realtime bus).'
+- id: transition-verb-orphaned-by-self-update-handoff
+  subject: transition verb repeatedly orphaned by agentplug-runner self-update handoff mid-dispatch
+  notes: 'Dispatched transition{to:STATE} 6 times consecutively; each was killed mid-flight by a daemon self-update handoff (error_code:dispatch_orphaned, confirmed via out/transition-*.json error field referencing agentplug self-update handoff). Not a code bug in busybase -- this is the gm-plugkit/agentplug-runner tooling itself churning through repeated auto-updates during this session. Recovery per protocol: boot + re-dispatch is correct; this row documents the pattern per the stuck-loop-escalation rule (3+ identical denials) rather than continuing silent blind retries indefinitely. Will keep retrying with reboots since everything is fixable and blockedBy:external is not acceptable, but recording the concrete stuck state as instructed.'
+  status: completed
+  witness: 'Confirmed via .gm/exec-spool/out/transition-175.json: the dispatch actually succeeded in the background (phase advanced to STATE) despite the synchronous read initially reporting dispatch_orphaned -- a reporting race during daemon self-update, not a true failure. instruction verb confirms phase=STATE now. No code fix needed; recovery-by-reboot-and-recheck was correct.'
+- id: embedded-keypair-full-implementation
+  subject: Implement real Ed25519 keypair auth in embedded mode (was left as honest stub error)
+  notes: 'Found during gm-continue confirming pass via codesearch for not-yet-implemented markers: embedded.ts keypair.signIn/restore returned an honest {error} instead of the previous false-positive ok({}), but the feature itself was still missing. Implemented full genKeypair/sign/nonce-round-trip against handleAuth keypair action, matching sdk.ts semantics. Verified live: fresh signIn creates a user+session, export/restore round-trips to the same identity, different keys yield different identities (14/14 embedded smoke checks pass).'
+  status: completed
+  witness: 'src/embedded.ts genKeypair/signNonce/keypair object implemented; embedded_smoke.ts run live: 14/14 checks pass including fresh signIn, export/restore identity round-trip, distinct-keys distinct-identity.'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: docs-docs-html-drift-check
+  subject: docs/docs.html (2302 lines) and docs/index.html (230 lines) are saturated with LanceDB/Arrow-file/vector-search claims across meta description, architecture table, config table (BUSYBASE_DIR described as 'LanceDB Arrow files'), sessions table description, full Vector Search section (~docs.html:1183-1250), REST API vec param docs, CLI docs, and comparison table vs Supabase/PocketBase — every single one contradicts the real libSQL/SQLite implementation in src/db.ts. This is a full rewrite of the storage/vector narrative across both files, not a spot-fix
+  status: completed
+  witness: Rewrote every LanceDB/Arrow/ANN reference across docs/docs.html and docs/index.html (intro, key facts table, config table, sessions, vector search section, SQL panel description, embedded mode, upsert semantics, comparison table) to describe libSQL/SQLite and brute-force cosine search; verified zero remaining lancedb matches via grep
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: ensure-table-race-multi-process
+  subject: ensureTableIn in db.ts serializes CREATE/ALTER per (client, table) via an in-process WeakMap lock, but this only protects concurrent requests within one process — embedded.ts creates a new Client per createEmbedded() call, so two embedded processes (or the HTTP server + a separate embedded process) pointed at the same db.sqlite file can still race CREATE TABLE/ALTER TABLE ADD COLUMN with no cross-process lock
+  status: completed
+  witness: 'Reviewed ensureTableIn/ensureColsIn: CREATE TABLE IF NOT EXISTS is inherently cross-process-safe; ALTER TABLE ADD COLUMN races are already swallowed via .catch(()=>{}) in ensureColsIn, correctly handling the cross-process duplicate-column case. No change needed -- design already correct'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: cli-test-no-vec-coverage
+  subject: cli.ts test suite exercises auth, CRUD, filters, modifiers, and realtime exhaustively but has zero coverage of vec()/vector search despite README documenting it as a headline feature — once vec is fixed or removed, test coverage must follow
+  status: completed
+  witness: 'Added [vector search] block to cli.ts busybase test: insert with/without vectors, .vec() closest-match assertion, _distance presence, exclusion of vectorless rows, sort order, limit. All 6 checks pass live (76 passed, 0 failed total)'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: package-json-main-points-to-unbuilt-js
+  subject: package.json main/module/exports point to src/sdk.js, src/embedded.js, src/server.js which do not exist in the repo (only .ts sources are committed) until 'bun run build' runs — confirm .gitignore excludes them intentionally and that this doesn't break 'npm install && import busybase' for consumers who don't build from source (published npm package should have them via prepublish, but local git clone usage should be checked)
+  status: completed
+  witness: Confirmed src/*.js is intentionally gitignored (build artifacts), package.json files/exports/bin correctly point to them for the published npm package (built via CI prepublish), and CLAUDE.md already documents running via bun run src/cli.ts directly for local dev. No change needed -- design already correct and documented
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: auth-verify-get-csrf-considerations
+  subject: auth.ts action=verify handles password reset confirmation; token/type can arrive via query string (GET) per the README's email link. Need to confirm no state-changing side effect fires on a bare GET (e.g. link prefetching by email scanners) — verify handler requires POST-like B.password, but the route dispatch in server.ts needs checking for whether GET-with-token silently succeeds partial state
+  status: completed
+  witness: 'Reviewed auth.ts verify handler: requires B.password (POST body) before any mutation; a bare GET-with-token (email link prefetch) fails at the password check before deleting the token or mutating state, so the real POST later still succeeds. No CSRF/prefetch issue exists. No change needed'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: studio-panels-audit
+  subject: studio/*.js panels read in full. tables.js and auth.js correctly escape via esc(). realtime.js only interpolates its own generated ts/type/table/JSON.stringify(payload) — no unescaped user-controlled HTML sink. sql.js and settings.js DO have unescaped innerHTML XSS sinks, filed as studio-sql-js-xss-unescaped-cells and studio-settings-js-xss-unescaped-config-values. BUSYBASE_STUDIO_TOKEN enforcement (server.ts studioAuthorized) gates the /studio page load and API routes uniformly via server.ts pathname check, not per-panel — correct, no separate row needed
+  status: completed
+  witness: Read all studio/*.js panels in full -- tables.js/auth.js already correct, realtime.js has no unescaped sink, sql.js and settings.js XSS fixed and witnessed, BUSYBASE_STUDIO_TOKEN gating confirmed correct in server.ts
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: rest-crud-no-rate-limit
+  subject: auth.ts rate-limits signup/token/recover/keypair via rateLimited() but rest.ts's handleRest (GET/POST/PUT/PATCH/DELETE on arbitrary tables) has zero rate limiting — an authenticated or anonymous keypair user can hammer /rest/v1/:table unbounded
+  status: completed
+  witness: 'Extracted makeRateLimiter to db.ts (shared with auth.ts, removing duplication), applied 300req/60s IP-keyed limiter to mutating REST verbs in rest.ts/server.ts. Live-witnessed via curl loop: 299x201 then 429s'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: sdk-vec-dead-param
+  subject: sdk.ts and embedded.ts Q().vec() sets q.vec and serializes it into the querystring but rest.ts's toFilter() and handleRest() never read P.vec anywhere — vector search is entirely non-functional, silently ignored server-side
+  status: completed
+  witness: 'Implemented real vec search: db.ts cosineDistance/parseVector/vecSearch, wired into rest.ts GET handler behind P.vec, embedded.ts Q().vec() added. Live-witnessed via curl against running server: POST insert with raw vector array, GET with vec= param returns rows sorted ascending by _distance'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: readme-lancedb-mismatch
+  subject: 'README claims LanceDB/vector-search storage, Ed25519+bcrypt via Bun.password, and /rest/v1/_users listing — actual implementation is libSQL/SQLite (db.ts), no vector search exists in rest.ts/toFilter, and .vec() in sdk/embedded is a documented lie: it sends a vec param the server ignores entirely'
+  status: completed
+  witness: Rewrote README storage/vector badges, hero copy, feature table, config table, and Architecture section to describe libSQL/SQLite and brute-force cosine vec search instead of LanceDB
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: sdk-keypair-signin-dead-privcrypto
+  subject: sdk.ts keypair.signIn (browser/node SDK) imports privkey via crypto.subtle.importKey into privCrypto local var when pubkey is missing, then immediately returns an error without using privCrypto — dead code, and the error message tells the user to call keypair.restore(privkey, pubkey) which requires them to already have pubkey, an unresolvable catch-22 if only privkey was saved
+  status: completed
+  witness: Removed unreachable importKey call in sdk.ts keypair.signIn before the guaranteed-return branch; kept the comment explaining WebCrypto's real limitation
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: no-input-length-limits
+  subject: dbInsertIn/dbUpdateIn in db.ts stringify arbitrary row values with no length cap; rest.ts POST accepts arbitrary JSON bodies with no size limit beyond what Bun.serve enforces by default — a large single request could bloat SQLite or memory; check if Bun.serve has a default maxRequestBodySize and whether it's sane for this use case
+  status: completed
+  witness: Added BUSYBASE_MAX_BODY_SIZE env var (default 10MB) wired into Bun.serve maxRequestBodySize in server.ts, replacing Buns 128MB default; documented in README, CLAUDE.md, docs.html config tables
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: studio-sql-js-xss-unescaped-cells
+  subject: studio/sql.js draw() renders ${row[c]??''} directly into innerHTML template literal with zero escaping (line 56) — unlike tables.js and auth.js which both define and use an esc() helper. Any cell value containing HTML/script executes in the Studio operator's browser session (stored/reflected XSS via arbitrary table data an anonymous keypair user can insert)
+  status: completed
+  witness: Added esc() helper to studio/sql.js, applied to column headers and every cell value in the results table
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: studio-settings-js-xss-unescaped-config-values
+  subject: studio/settings.js draw() renders ${v} directly into innerHTML (line 25) for each config entry without escaping — lower risk since values come from /studio/config (server-controlled env vars), but inconsistent with the codebase's own esc() pattern used elsewhere; BUSYBASE_CORS_ORIGIN is operator-set but should still be escaped defensively
+  status: completed
+  witness: Added esc() helper to studio/settings.js, applied to config table keys/values and the error message div
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: gui-html-external-cdn-dependency
+  subject: src/gui.html loads rippleui CSS and webjsx/webjsx-jsx-runtime from cdn.jsdelivr.net (lines 7-8) — breaks the 'self-hosted, zero-config, no Docker' pitch when the deploy environment has no internet egress to jsdelivr; the built-in GUI becomes non-functional offline while Studio (studio/*.js) is fully self-contained. Consider vendoring or documenting the constraint
+  status: completed
+  witness: Documented as a known, accepted constraint -- vendoring rippleui+webjsx would be a larger architectural change than doc-perfection scope; Studio (studio/*.js) remains the fully self-contained zero-dependency admin UI for offline/airgapped deployments, gui.html is the CDN-dependent convenience UI. No code change; constraint is now explicit in this resolution
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: sql-js-lancedb-syntax-label
+  subject: studio/sql.js filter input placeholder/label says 'Filter (LanceDB syntax, e.g. eq.name=Alice)' (line 38) — same doc-drift as README, must say libSQL/SQL filter syntax or just 'filter syntax'
+  status: completed
+  witness: Changed studio/sql.js filter label from 'Filter (LanceDB syntax, e.g. eq.name=Alice)' to 'Filter (e.g. eq.name=Alice)'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: gui-html-vec-explorer-example
+  subject: src/gui.html ApiTab examples array includes 'Vector search' -> GET /rest/v1/.../?vec=[1,0,0,0]&limit=5 (line 322) — exercises the same non-functional vec param as sdk-vec-dead-param; once vec is fixed or removed this example must be updated or removed
+  status: completed
+  witness: gui.html's Vector search API Explorer example (vec=[1,0,0,0]) now exercises a genuinely functional endpoint after the vec search implementation -- no longer dead, no change needed to the example itself
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: gui-html-audit
+  subject: 'src/gui.html read in full: webjsx h()-based rendering is XSS-safe (values passed as JS args, not raw HTML strings) unlike sql.js/settings.js. Two real findings filed separately: gui-html-vec-explorer-example (dead vec API example) and gui-html-external-cdn-dependency (jsdelivr CDN breaks offline self-hosted pitch). No further gui.html-specific rows needed'
+  status: completed
+  witness: Read src/gui.html in full -- webjsx h()-based rendering confirmed XSS-safe (values passed as JS args). Findings split into gui-html-vec-explorer-example and gui-html-external-cdn-dependency
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: sdk-resetpassword-stub-http
+  subject: sdk.ts HTTP SDK resetPasswordForEmail was a hardcoded stub never calling auth/v1/recover
+  status: completed
+  witness: sdk.ts resetPasswordForEmail now calls req(auth/v1/recover, POST) instead of returning a hardcoded stub; live-witnessed via bun run src/cli.ts test - 76 passed 0 failed
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: sql-js-additional-xss-sinks
+  subject: 'studio/sql.js had two more unescaped innerHTML sinks missed on first pass: table <option> value/text (line 38) and the error message div (line 50)'
+  status: completed
+  witness: 'Fixed table option value/text and error message div in studio/sql.js to use esc(). Live-witnessed via browser dispatch: inserted row with <img src=x onerror=alert(1)> payload, ran SQL panel query against it, verified hasEscaped=true, hasRawImg=false, imgElements=0 in the live DOM'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: studio-no-trailing-slash-404
+  subject: GET /studio (no trailing slash) served the same index.html as /studio/ but browsers resolve its relative ./panel.js dynamic imports against /studio not /studio/, causing every panel to 404 -- discovered live via browser dispatch witnessing the sql.js XSS fix
+  status: completed
+  witness: 'server.ts GET /studio now 301-redirects to /studio/; verified live via curl (301 -> Location: /studio/) and browser dispatch loading /studio/ successfully (sql.js panel loaded, no 404)'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: studio-realtime-js-table-name-xss
+  subject: studio/realtime.js line 22 interpolates ${e.table||"*"} directly into innerHTML unescaped -- table name comes from the WebSocket subscribe/broadcast message itself, which is derived from real table names an attacker controls by creating a maliciously-named table via REST insert, so this is a real unescaped sink missed in the first studio-panels-audit pass
+  status: completed
+  witness: Added esc() to studio/realtime.js, applied to e.table and JSON.stringify(e.payload) interpolations -- table names and payload data both originate from real REST-insertable data and were previously unescaped
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: rest-rate-limiter-unswept-leak
+  subject: 'restRateLimiter in rest.ts (added for rest-crud-no-rate-limit) had no periodic sweep -- discovered during STATE phase ownership sweep: authRateLimiter is swept via sweepExpired() every 5min but restRateLimiter buckets grow unbounded per distinct IP with no cleanup, a real long-running-server memory leak'
+  status: completed
+  witness: 'Exported restRateLimiter from rest.ts, wired restRateLimiter.sweep() into server.ts setInterval alongside sweepExpired(). Live-witnessed: server starts clean, 5 rapid mutating requests succeed (201x5), full CLI test suite 76 passed 0 failed with the sweep interval active'
+- session_id: gm-051c49ad-4900-4d5d-8d56-4591abd8d5db
+  id: ci-publish-workflow-stale-vectordb-external
+  subject: .github/workflows/publish.yml build steps pass --external vectordb (5 occurrences) instead of --external @libsql/client -- stale from the same LanceDB-to-libSQL migration this session already fixed everywhere else; package.json build script correctly uses @libsql/client but CI diverges, meaning a real npm publish would bundle libsql (breaking native bindings) instead of leaving it external
+  status: completed
+  witness: 'Changed all 5 --external vectordb occurrences in .github/workflows/publish.yml to --external @libsql/client, matching package.json build script exactly. Verified live: ran all 5 corrected bun build commands locally, all succeed'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-toasts-alert-component
+  subject: Replace gui.html's hand-rolled .toast/S.toasts array + inline alert divs with anentrypoint-design's Alert({kind,title,onDismiss,children}) component, preserving the existing auto-dismiss timeout behavior
+  status: completed
+  witness: 'Replaced .toast/S.toasts markup with Alert({kind,children}) inside a .bb-toasts fixed-position container, same auto-dismiss setTimeout(3000) behavior preserved. Live-witnessed: Inserted/Saved/Deleted toast text appeared in body.innerText after each action during the CRUD cycle test'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-remove-old-cdn-imports
+  subject: Remove the old <link rippleui@1.12.1> stylesheet and <script type=importmap> webjsx@0.0.73/webjsx-jsx-runtime CDN entries from gui.html once anentrypoint-design's single bundle covers both (webjsx export + ./css stylesheet export)
+  status: completed
+  witness: 'Removed the rippleui@1.12.1 stylesheet link and the webjsx/webjsx-jsx-runtime importmap entirely; single anentrypoint-design import replaces both. Verified via grep: zero remaining references to rippleui or the old webjsx CDN URL in gui.html'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-buttons-btn-component
+  subject: Replace gui.html's .btn/.btn-primary/.btn-ghost/.btn-error CSS-class buttons with Btn({variant,size,onClick,children}) across DataTab/AuthTab/ApiTab toolbars
+  status: completed
+  witness: 'Replaced all .btn CSS-class buttons with Btn({variant,size,onClick,children}). Found and fixed a real bug: Btn/Alert/Panel take children as a props-object key, not a second positional h()-style argument -- every call site was silently dropping its label/content. Live-witnessed after fix: all buttons render with correct text and fire their handlers (login, insert, delete, refresh, run, clear all confirmed working)'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-verify-all-tabs-live
+  subject: 'After the rewrite, live-browser-witness every gui.html tab (Data: add/edit/delete row, table create/remove; Auth: keypair login, email signup/signin, keypair export/import; API Explorer: run each example query; Logs: verify log entries render) against a running busybase server, not just visual inspection'
+  status: completed
+  witness: 'Live-browser-witnessed every tab against a running busybase server: Data (add table, insert/edit/delete row), Auth (keypair sign-in creating a real user+session, API Explorer login examples), API Explorer (Get user example populates textarea and Run returns real JSON), Logs (real request log entries render with timestamp/label/JSON body)'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-datatab-table-component
+  subject: Replace DataTab's hand-rolled <table> with anentrypoint-design's Table({headers, rows, onRowClick, striped, compact}) component; verify it supports inline-editable cells (current gui.html supports dblclick-to-edit) or bridge via onRowClick + a TextField-based edit affordance if Table itself is read-only-rows
+  status: completed
+  witness: 'Kept DataTab''s custom editable <table> markup (Table() component has no per-cell edit hook, only onRowClick) restyled with the design system''s CSS -- documented decision, not a gap. Live-witnessed: full CRUD cycle (add table, insert row, dblclick-edit cell, delete row) all confirmed working end-to-end against a real server'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-adopt-anentrypoint-design
+  subject: Replace src/gui.html's manual rippleui+webjsx CDN imports (jsdelivr rippleui@1.12.1 + webjsx@0.0.73) with anentrypoint-design@latest single-package CDN import -- it bundles webjsx directly (exports h/webjsx/mount/applyDiff) plus a modified ripple-ui component set (Btn/TextField/Select/Table/Panel/AppShell/Topbar/Side/Alert), removing the need for hand-rolled markup/CSS classes in gui.html's current DataTab/AuthTab/ApiTab/LogsTab render functions
+  status: completed
+  witness: 'Rewrote src/gui.html to import anentrypoint-design@latest from jsdelivr (single bundle: dist/247420.js for webjsx/mount/components, dist/247420.css for styles) replacing the old separate rippleui+webjsx CDN imports. Verified live via browser dispatch: page loads with zero console/page errors, all 4 tabs render and function'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-mount-api-migration
+  subject: Migrate gui.html's manual applyDiff(document.getElementById('app'), h(App,null)) + module-level render() calls to anentrypoint-design's mount(rootEl, viewFn) API, which returns its own render()-triggering function and handles requestAnimationFrame-batched re-renders internally
+  status: completed
+  witness: 'Replaced applyDiff(el, h(App,null)) + manual render() with anentrypoint-design''s mount(rootEl, viewFn) returning its own render-triggering function, assigned to the existing module-level render var so all existing call sites needed zero changes. Live-witnessed: state updates (login, insert, tab switch) all reflect in the DOM after calling render()'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-appshell-layout
+  subject: Replace gui.html's hand-rolled .sidebar/.main/.layout CSS and markup with anentrypoint-design's AppShell({topbar, side, main, status}) component -- topbar via Topbar({brand:'BusyBase', items, active, onNav}), side via Side({sections}) for the data/auth/api/logs nav
+  status: completed
+  witness: 'Replaced hand-rolled .sidebar/.main/.layout with AppShell({topbar,side,main,status}) using Topbar([label,href] tuples) and Side({sections:[{group,items}]}) -- real prop shapes discovered by reading the minified bundle source since the generated .d.ts left them as untyped any[]. Live-witnessed: nav renders correctly, tab switching works via both topbar links and sidebar items'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-webjsx-h-import-consistency
+  subject: Confirm gui.html imports h/Fragment from anentrypoint-design's exported webjsx object (or its direct h/applyDiff exports) rather than mixing a separate webjsx CDN import -- 'use webjsx for the setup if not already' in the request implies auditing that the whole render tree consistently uses one webjsx source, not two divergent copies
+  status: completed
+  witness: gui.html now imports h and webjsx exclusively from anentrypoint-design's single bundle (which re-exports webjsx directly) -- no separate webjsx CDN import remains, confirmed via grep showing only one import statement in the file
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-anon-cdn-availability-risk
+  subject: anentrypoint-design is a small (~484 published versions), single-maintainer npm package on jsdelivr -- same offline/CDN-availability caveat as the old rippleui+webjsx setup (already documented as gui-html-external-cdn-dependency in a prior session); confirm this constraint carries over honestly in code comments/docs rather than silently, and check if a version pin (vs @latest) is warranted for stability despite the user's explicit 'latest' request
+  status: completed
+  witness: 'Documented explicitly in CLAUDE.md''s new GUI section: same jsdelivr CDN-availability caveat as before, will not load without internet access. Kept @latest per explicit user request rather than pinning -- user instruction takes precedence over the general stability preference, and anentrypoint-design is the same maintainer/org as this project so version drift risk is low'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-css-scope-class-verification
+  subject: anentrypoint-design's mount() auto-adds a .ds-247420 scope class to the root element (autoScope:true default) that all component CSS rules are prefixed with -- verify this doesn't collide with any existing gui.html class names or break the toast/dimmed/cell-edit custom CSS gui.html still needs for busybase-specific behavior not covered by the component library
+  status: completed
+  witness: mount()'s autoScope:true (default, unchanged) adds .ds-247420 to the root element; verified no collision with gui.html's own bb-* prefixed custom classes (bb-nav-item, bb-cell-edit, bb-toasts, bb-editable-table) via live render -- all custom styles applied correctly alongside design-system component styles in the same live probes
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-theme-toggle
+  subject: Wire in anentrypoint-design's initTheme()/ThemeToggle()/applyTheme() so gui.html gains light/dark theme support via the package's built-in theme system, replacing the currently hardcoded dark-only rippleui theme
+  status: completed
+  witness: 'Wired initTheme() at startup; Topbar''s built-in theme toggle button (themeToggle:true default) provides the UI, no separate ThemeToggle() call needed. Live-witnessed: clicking the theme button cycled document theme attribute from auto to paper'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-forms-textfield-select
+  subject: Replace gui.html's raw input.input elements (new-table-name, filter, new-row cells, login email/password) with TextField(label,value,onInput) and table dropdowns with Select(label,value,options,onChange)
+  status: completed
+  witness: 'Replaced raw input.input elements with TextField(label,value,onInput) in AuthTab (email/password) and DataTab (table name, filter). Found and fixed a real bug: TextField.onInput/Select.onChange call back with (value, event) not (event) -- initial code treated the first arg as a DOM event (e.target.value), silently writing undefined. Live-witnessed after fix: table-name input and login fields all update state correctly'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-undocumented-in-claude-md
+  subject: 'src/gui.html served at / and /gui by server.ts staticRoutes is not documented anywhere in CLAUDE.md (which documents Studio at /studio in detail but never mentions the separate gui.html surface) -- add a GUI section to CLAUDE.md describing its purpose (webjsx+anentrypoint-design SPA: Data/Auth/API Explorer/Logs tabs), distinct from Studio (the zero-dependency operator UI)'
+  status: completed
+  witness: Added a GUI section to CLAUDE.md documenting src/gui.html's purpose, four tabs, and the anentrypoint-design component API quirks discovered during this session (children-as-prop-key, value-first callback signature, tuple/object shapes for Topbar/Side/Table) that aren't captured in the package's generated .d.ts -- also fixed a stale Studio route doc line (GET /studio now redirects, doesn't serve directly)
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-newrow-newtablename-contamination
+  subject: gui.html DataTab reuses S.newRow._newTableName to store the new-table-name TextField value, which leaks _newTableName as a real column into every subsequent row insert (visible live as an actual _NEWTABLENAME column in the table) -- needs its own separate state field, e.g. S.newTableName, not piggybacked on S.newRow
+  status: completed
+  witness: 'Added a dedicated S.newTableName field, removing the S.newRow._newTableName piggyback that was leaking a real _newTableName column into every table insert. Live-witnessed: fresh table+row created after the fix has clean id/name/score columns only, no contamination'
+- session_id: gm-4d41fa1f-62a5-4e9e-aa37-ddd093a7be0f
+  id: gui-html-loadtables-only-on-keypair-restore
+  subject: gui.html only calls loadTables() when tryRestoreKeypair() succeeds -- but S.tables is a plain localStorage-persisted list unrelated to auth state, so a user who never had a keypair (fresh browser/incognito) or who uses email/password auth never sees their previously-added table list at all on page load
+  status: completed
+  witness: 'Changed startup sequence to call loadTables() unconditionally (not gated on tryRestoreKeypair() success). Live-witnessed: a fresh browser context with localStorage tables set but no keypair credentials still shows the persisted table list on page load'
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: hooks-smtp-multichunk-response-not-handled
+  subject: hooks.ts smtpSend's wait()/data() handler assumes each TCP data event is one complete SMTP reply line, and wait() falls back to a blind 5000ms timeout treating whatever partial data arrived as the full response -- a slow-but-healthy SMTP server (response after 5s) or a reply split across two TCP packets can produce a spurious failure or a bogus status-code parse from a truncated line, distinct from the already-fixed always-succeeds bug
+  status: completed
+  witness: Rewrote smtpSend's data handler to accumulate a buffer across TCP data events and detect reply completion via the real SMTP multi-line convention (code+space = terminal line, code+dash = continuation), replacing the single-data-event-is-a-complete-reply assumption. Also replaced the blind 5s success-fallback with a 15s timeout that rejects (fails loud) instead of silently treating a partial buffer as a complete reply
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: realtime-canaccess-hardcoded-null-user
+  subject: 'realtime.ts wsHandlers.message calls fireHook(''canAccess'', {user: null, table, method:''GET''}) unconditionally on every subscribe -- unlike REST''s canAccess check (rest.ts) which resolves the real authenticated user via getUserFromRequestIn, the WebSocket subscribe path never attempts to identify the connecting user at all, so any canAccess hook checking user identity/role always sees an anonymous null user over realtime even for an authenticated session, a real capability gap versus the REST path''s per-request auth'
+  status: completed
+  witness: 'server.ts now resolves the real authenticated user at WebSocket upgrade time (Authorization header or ?token= query param, same pattern as Studio''s token auth) and threads it into ws.data.user, which realtime.ts''s canAccess hook call now reads instead of a hardcoded null. Live-witnessed via a custom hooks.ts probe: an authenticated keypair session''s real user id appears in the canAccess hook call over a WebSocket subscribe, while an anonymous connection still correctly receives user:null. Added a CLI test suite check verifying a ?token=-authenticated WS connection still subscribes and receives events correctly'
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: ci-no-test-gate-before-publish-release
+  subject: Neither .github/workflows/publish.yml (npm publish) nor release.yml (binary builds) runs the existing 76+-check busybase test CLI suite before shipping -- a regression in auth/CRUD/filters/vec/realtime could publish to npm or GitHub Releases with zero automated verification despite the test suite already existing and being comprehensive
+  status: completed
+  witness: 'Added a Run test suite step (start server, run busybase test) before the build steps in publish.yml, and a new gated test job (needs: by the build job) in release.yml. Verified locally: full test suite (82 checks) passes against a running server using the same command sequence'
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: package-json-missing-docs-dir
+  subject: package.json files array (lines 20-27) lists src/*.js and studio/ but never docs/, even though server.ts staticRoutes serves /docs and /site from ../docs/docs.html and ../docs/index.html relative to the built server.js -- npm install busybase && busybase serve gets 404s on /docs and /site
+  status: completed
+  witness: Added docs/ to package.json files array
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: rest-get-default-limit-undocumented
+  subject: rest.ts GET defaults to limit=1000 (Math.max(0,parseInt(P.limit)||1000)) when the caller passes no .limit(), silently truncating any table with more than 1000 rows and no signal unless count=exact is explicitly requested -- not documented in README/CLAUDE.md/docs.html's REST API section alongside the already-documented MAX_ROWS_FETCHED=50000 hard ceiling
+  status: completed
+  witness: Documented the 1000-row default GET limit and the count=exact escape hatch in CLAUDE.md's new Single-Process Assumptions section, alongside the existing MAX_ROWS_FETCHED=50000 hard ceiling
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: realtime-registry-empty-set-never-pruned
+  subject: realtime.ts registry Map never removes a table's Set entry once created, even after every subscriber unsubscribes/disconnects and the Set becomes empty -- a server that sees subscriptions to many distinct table names over its uptime accumulates empty Set objects in the Map forever, a slow unbounded-growth memory leak proportional to distinct-tables-ever-subscribed, not distinct-tables-currently-subscribed
+  status: completed
+  witness: 'unsub() now deletes the table''s Set entry from the registry Map once it''s empty, and close() was fixed to call unsub() per table (was previously bypassing pruning with a raw registry.get(table)?.delete(ws)). Live-witnessed: realtime subscribe/insert/receive cycle still works correctly after the refactor (76+ CLI test suite realtime checks pass unchanged)'
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: package-json-missing-gui-html
+  subject: package.json files array was also missing src/gui.html (served at / and /gui by server.ts) alongside the already-flagged missing docs/ -- discovered while fixing package-json-missing-docs-dir
+  status: completed
+  witness: Added src/gui.html to package.json files array (discovered while fixing the docs/ gap)
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: auth-nonces-resettokens-inprocess-undocumented
+  subject: auth.ts nonces/resetTokens are undocumented in-process Maps, a multi-instance deployment constraint
+  status: completed
+  witness: Documented in CLAUDE.md Single-Process Assumptions section
+- session_id: gm-63c2e51e-383c-4fd7-997e-380fe9a5e343
+  id: rest-empty-result-column-validation-skipped
+  subject: rest.ts knownCols is null on empty result sets, letting bogus select/order columns silently pass
+  status: completed
+  witness: 'Added getTableColumnsIn via PRAGMA table_info, wired into rest.ts GET when knownCols is null but select/order need validation. Live-witnessed via curl: bogus columns rejected with 400 on empty result sets too. Added 5 CLI test suite checks, 82 total passing'
+- session_id: busybase-gmpull-1
+  id: readme-missing-env-vars
+  subject: README.md Configuration table missing BUSYBASE_CORS_ORIGIN and BUSYBASE_STUDIO_TOKEN
+  notes: Both vars are real (src/db.ts, src/server.ts) and documented in CLAUDE.md but absent from README's env var table -- doc drift.
+  status: completed
+  witness: Added both rows to README.md Configuration table.
+- session_id: busybase-gmpull-1
+  id: stale-master-branch-refs
+  subject: README.md, docs/docs.html, .github/workflows/release.yml referenced master branch after main/master consolidation
+  notes: Repo default branch is now main (master deleted). release.yml build trigger branches:[master] was a real functional bug -- CI would never fire again on push to main.
+  status: completed
+  witness: 'Fixed all three: README.md prose, docs/docs.html prose, release.yml push trigger changed to [main]. Rebuilt clean, no functional regression.'
+- session_id: busybase-gmpull-1
+  id: rest-numeric-filter-lexical-compare-bug
+  subject: gt/gte/lt/lte filters and order= sort compared TEXT-affinity numeric columns lexically, not numerically
+  notes: 'db.ts toFilter built raw string comparisons (''${col} > ${val}'') against TEXT columns -- SQLite compares TEXT lexically so ''20'' > ''9'' is false and ''100'' > ''9'' is false, only ''999'' > ''9'' true. rest.ts order= sort used a[col] > b[col] string comparison with same defect. Confirmed live via curl: gt.price=9 on rows [9,20,100,999] returned only 999 before fix.'
+  status: completed
+  witness: 'Added cmpExpr() helper in db.ts casting both sides to REAL via CAST(col AS REAL) when RHS parses as a finite number and op is gt/gte/lt/lte, applied to the eq/neq/gt/gte/lt/lte branch, the or= branch, and the not. branch. Fixed rest.ts order= sort with numCmp() doing numeric compare when both values parse as finite numbers, else falling back to string compare. Rebuilt (bun run build) and re-verified live: gt.price=9 on [9,20,100,999] now returns [20,100,999]; gt.price=15 returns [20,100,999]; lt.price=100 returns [9,20]; order=price.asc/desc now numerically correct.'

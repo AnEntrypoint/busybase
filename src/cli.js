@@ -7,17 +7,25 @@ var __promiseAll = (args) => Promise.all(args);
 var smtpHost, smtpPort, smtpUser, smtpPass, smtpFrom, b64e = (s) => Buffer.from(s).toString("base64"), smtpSend = async (to, subject, html) => {
   if (!smtpHost)
     return false;
-  const lines = [];
+  let buffer = "";
   let notify = null;
+  const useTls = smtpPort === 465;
+  const isTerminalReplyLine = (line) => !!line && /^\d{3} /.test(line);
+  const isMultiLineReplyComplete = (buf) => {
+    const lines = buf.split(`\r
+`).filter(Boolean);
+    return isTerminalReplyLine(lines[lines.length - 1]);
+  };
   const conn = await Bun.connect({
     hostname: smtpHost,
     port: smtpPort,
+    tls: useTls,
     socket: {
       open() {},
       data(_s, d) {
-        lines.push(...d.toString().split(`\r
-`).filter(Boolean));
-        notify?.();
+        buffer += d.toString();
+        if (isMultiLineReplyComplete(buffer))
+          notify?.();
       },
       error(_s, e) {
         console.error("[SMTP]", e);
@@ -27,26 +35,34 @@ var smtpHost, smtpPort, smtpUser, smtpPass, smtpFrom, b64e = (s) => Buffer.from(
   });
   const send = (l) => conn.write(l + `\r
 `);
-  const wait = () => new Promise((r) => {
-    notify = r;
-    setTimeout(r, 3000);
+  const wait = (label) => new Promise((resolve, reject) => {
+    buffer = "";
+    notify = () => resolve(buffer.split(`\r
+`).filter(Boolean));
+    setTimeout(() => reject(new Error(`SMTP ${label} timed out waiting for a complete reply: ${JSON.stringify(buffer)}`)), 15000);
   });
+  const expectOk = async (label) => {
+    const lines = await wait(label);
+    const code = parseInt(lines[lines.length - 1]?.slice(0, 3) || "0");
+    if (code >= 400 || code === 0)
+      throw new Error(`SMTP ${label} failed: ${lines.join(" ") || "no response"}`);
+  };
   try {
-    await wait();
+    await expectOk("connect");
     send("EHLO busybase");
-    await wait();
+    await expectOk("EHLO");
     send("AUTH LOGIN");
-    await wait();
+    await expectOk("AUTH LOGIN");
     send(b64e(smtpUser));
-    await wait();
+    await expectOk("AUTH username");
     send(b64e(smtpPass));
-    await wait();
+    await expectOk("AUTH password");
     send(`MAIL FROM:<${smtpFrom}>`);
-    await wait();
+    await expectOk("MAIL FROM");
     send(`RCPT TO:<${to}>`);
-    await wait();
+    await expectOk("RCPT TO");
     send("DATA");
-    await wait();
+    await expectOk("DATA");
     send(`From: ${smtpFrom}\r
 To: ${to}\r
 Subject: ${subject}\r
@@ -55,14 +71,14 @@ Content-Type: text/html; charset=utf-8\r
 \r
 ${html}\r
 .`);
-    await wait();
+    await expectOk("message body");
     send("QUIT");
   } finally {
     conn.end();
   }
   return true;
-}, hooksFile, userHooks, hooks, fireHook = async (name, ...args) => {
-  const fn = hooks[name];
+}, hooksFile, userHooks, hooks, fireHookOn = async (h, name, ...args) => {
+  const fn = h[name];
   if (!fn)
     return null;
   try {
@@ -72,11 +88,12 @@ ${html}\r
     if (r && typeof r === "object" && typeof r.error === "string")
       return r.error;
   } catch (e) {
-    return e?.message || String(e);
+    console.error(`[BusyBase] Hook "${String(name)}" threw:`, e);
+    return "Internal error";
   }
   return null;
-}, pipeHook = async (name, value, ...args) => {
-  const fn = hooks[name];
+}, pipeHookOn = async (h, name, value, ...args) => {
+  const fn = h[name];
   if (!fn)
     return value;
   try {
@@ -85,15 +102,19 @@ ${html}\r
       return r;
   } catch {}
   return value;
-}, sendEmail = async (to, subject, html, text = "") => {
-  if (hooks.sendEmail) {
-    await hooks.sendEmail({ to, subject, html, text });
+}, fireHook = (name, ...args) => fireHookOn(hooks, name, ...args), pipeHook = (name, value, ...args) => pipeHookOn(hooks, name, value, ...args), sendEmailOn = async (h, to, subject, html, text = "") => {
+  if (h.sendEmail) {
+    await h.sendEmail({ to, subject, html, text });
     return;
   }
-  const sent = await smtpSend(to, subject, html);
-  if (!sent)
-    console.log(`[BusyBase] No email transport configured. Would send to ${to}: ${subject}`);
-};
+  try {
+    const sent = await smtpSend(to, subject, html);
+    if (!sent)
+      console.log(`[BusyBase] No email transport configured. Would send to ${to}: ${subject}`);
+  } catch (e) {
+    console.error(`[BusyBase] Failed to send email to ${to}:`, e);
+  }
+}, sendEmail = (to, subject, html, text = "") => sendEmailOn(hooks, to, subject, html, text);
 var init_hooks = __esm(async () => {
   smtpHost = process.env.BUSYBASE_SMTP_HOST;
   smtpPort = parseInt(process.env.BUSYBASE_SMTP_PORT || "587");
@@ -113,93 +134,131 @@ var init_hooks = __esm(async () => {
   hooks = userHooks;
 });
 
-// src/realtime.ts
-var registry, sub = (ws, table) => {
-  ws.data.tables.add(table);
-  if (!registry.has(table))
-    registry.set(table, new Set);
-  registry.get(table).add(ws);
-}, unsub = (ws, table) => {
-  ws.data.tables.delete(table);
-  registry.get(table)?.delete(ws);
-}, broadcastChange = (table, eventType, newRow, oldRow) => {
-  const subs = registry.get(table);
-  if (!subs?.size)
-    return;
-  const msg = JSON.stringify({ event: eventType, table, eventType, new: newRow ?? null, old: oldRow ?? null });
-  for (const ws of subs) {
-    try {
-      ws.send(msg);
-    } catch {}
-  }
-}, wsHandlers;
-var init_realtime = __esm(() => {
-  registry = new Map;
-  wsHandlers = {
-    open(ws) {
-      ws.data = { tables: new Set };
-    },
-    message(ws, raw) {
-      try {
-        const msg = JSON.parse(typeof raw === "string" ? raw : raw.toString());
-        if (msg.type === "subscribe" && msg.table)
-          sub(ws, msg.table);
-        else if (msg.type === "unsubscribe" && msg.table)
-          unsub(ws, msg.table);
-      } catch {}
-    },
-    close(ws) {
-      for (const table of ws.data?.tables ?? [])
-        registry.get(table)?.delete(ws);
-    }
-  };
-});
-
 // src/db.ts
 import { createClient } from "@libsql/client";
 import { mkdirSync } from "fs";
-var DIR, CORS_ORIGIN, cors, json = (data, status = 200, extra = {}) => Response.json(data, { status, headers: { ...cors, ...extra } }), ok = (data, status = 200, extra = {}) => json({ data, error: null }, status, extra), err = (msg, code = 400, hint = "") => json({ data: null, error: { message: msg, hint, code } }, code), esc = (s) => String(s).replace(/\0/g, "").replace(/'/g, "''"), validId = (s) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) && s !== "_users" && s !== "_sessions", db, tableExists = async (name) => {
-  const r = await db.execute({ sql: "SELECT name FROM sqlite_master WHERE type='table' AND name=?", args: [name] });
+var DIR, CORS_ORIGIN, cors, json = (data, status = 200, extra = {}) => Response.json(data, { status, headers: { ...cors, ...extra } }), ok = (data, status = 200, extra = {}) => json({ data, error: null }, status, extra), err = (msg, code = 400, hint = "") => json({ data: null, error: { message: msg, hint, code } }, code), esc = (s) => String(s).replace(/'/g, "''"), validId = (s) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) && s !== "_users" && s !== "_sessions", openClient = (dir) => {
+  mkdirSync(dir, { recursive: true });
+  return createClient({ url: `file:${dir}/db.sqlite` });
+}, initAuthTablesFor = async (client) => {
+  await client.execute(`CREATE TABLE IF NOT EXISTS _users (
+    id TEXT, email TEXT, pw TEXT, pubkey TEXT, role TEXT,
+    meta TEXT, app_meta TEXT, created TEXT, updated TEXT, last_sign_in TEXT
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS _sessions (token TEXT, refresh TEXT, uid TEXT, exp INTEGER)`);
+}, tableExistsIn = async (client, name) => {
+  const r = await client.execute({ sql: "SELECT name FROM sqlite_master WHERE type='table' AND name=?", args: [name] });
   return r.rows.length > 0;
-}, openTbl = async (name) => await tableExists(name) ? name : null, mkTbl = async (name, row) => {
+}, openTblIn = async (client, name) => await tableExistsIn(client, name) ? name : null, mkTblIn = async (client, name, row) => {
   const cols = Object.keys(row).map((k) => `${k} TEXT`).join(", ");
-  await db.execute(`CREATE TABLE IF NOT EXISTS ${name} (${cols})`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS ${name} (${cols})`);
   return name;
-}, ensureCols = async (name, row) => {
-  const info = await db.execute(`PRAGMA table_info(${name})`);
-  const existing = new Set(info.rows.map((r) => r.name));
+}, getTableColumnsIn = async (client, name) => {
+  const info = await client.execute(`PRAGMA table_info(${name})`);
+  return new Set(info.rows.map((r) => r.name));
+}, ensureColsIn = async (client, name, row) => {
+  const existing = await getTableColumnsIn(client, name);
   for (const k of Object.keys(row)) {
     if (!existing.has(k))
-      await db.execute(`ALTER TABLE ${name} ADD COLUMN ${k} TEXT`);
+      await client.execute(`ALTER TABLE ${name} ADD COLUMN ${k} TEXT`).catch(() => {});
   }
-}, dbInsert = async (name, row) => {
+}, tableLocksByClient, ensureTableIn = async (client, name, row) => {
+  let locks = tableLocksByClient.get(client);
+  if (!locks) {
+    locks = new Map;
+    tableLocksByClient.set(client, locks);
+  }
+  const prior = locks.get(name) || Promise.resolve();
+  const next = prior.then(async () => {
+    if (!await tableExistsIn(client, name))
+      await mkTblIn(client, name, row);
+    else
+      await ensureColsIn(client, name, row);
+  });
+  locks.set(name, next.catch(() => {}));
+  await next;
+}, toCell = (v) => v == null ? null : typeof v === "object" ? JSON.stringify(v) : String(v), dbInsertIn = async (client, name, row) => {
   const keys = Object.keys(row);
   const ph = keys.map(() => "?").join(", ");
-  const vals = keys.map((k) => row[k] == null ? null : String(row[k]));
-  await db.execute({ sql: `INSERT INTO ${name} (${keys.join(", ")}) VALUES (${ph})`, args: vals });
-}, getRows = async (name, where) => {
-  if (!await tableExists(name))
+  const vals = keys.map((k) => toCell(row[k]));
+  await client.execute({ sql: `INSERT INTO ${name} (${keys.join(", ")}) VALUES (${ph})`, args: vals });
+}, MAX_ROWS_FETCHED = 50000, getRowsIn = async (client, name, where) => {
+  if (!await tableExistsIn(client, name))
     return [];
-  const r = await db.execute(`SELECT * FROM ${name} WHERE ${where}`);
+  const r = await client.execute(`SELECT * FROM ${name} WHERE ${where} LIMIT ${MAX_ROWS_FETCHED}`);
   return r.rows.map((row) => ({ ...row }));
-}, getAllRows = async (name) => {
-  if (!await tableExists(name))
+}, getAllRowsIn = async (client, name) => {
+  if (!await tableExistsIn(client, name))
     return [];
-  const r = await db.execute(`SELECT * FROM ${name}`);
+  const r = await client.execute(`SELECT * FROM ${name} LIMIT ${MAX_ROWS_FETCHED}`);
   return r.rows.map((row) => ({ ...row }));
-}, dbUpdate = async (name, data, where) => {
+}, dbUpdateIn = async (client, name, data, where) => {
   const keys = Object.keys(data).filter((k) => k !== "id");
   if (!keys.length)
     return;
   const sets = keys.map((k) => `${k}=?`).join(", ");
-  const vals = keys.map((k) => data[k] == null ? null : String(data[k]));
-  await db.execute({ sql: `UPDATE ${name} SET ${sets} WHERE ${where}`, args: vals });
-}, dbDelete = async (name, where) => {
-  await db.execute(`DELETE FROM ${name} WHERE ${where}`);
-}, tableNames = async () => {
-  const r = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
+  const vals = keys.map((k) => toCell(data[k]));
+  await client.execute({ sql: `UPDATE ${name} SET ${sets} WHERE ${where}`, args: vals });
+}, dbDeleteIn = async (client, name, where) => {
+  await client.execute(`DELETE FROM ${name} WHERE ${where}`);
+}, tableNamesIn = async (client) => {
+  const r = await client.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
   return r.rows.map((row) => row.name);
-}, clean = (rows) => rows.map(({ pw, pubkey: _pk, ...r }) => r), makeUser = (u) => ({
+}, clean = (rows) => rows.map(({ pw, pubkey: _pk, ...r }) => r), makeRateLimiter = (windowMs, max) => {
+  const buckets = new Map;
+  const limited = (key) => {
+    const now = Date.now();
+    const hits = (buckets.get(key) || []).filter((t) => now - t < windowMs);
+    hits.push(now);
+    buckets.set(key, hits);
+    return hits.length > max;
+  };
+  const sweep = () => {
+    const now = Date.now();
+    for (const [k, hits] of buckets) {
+      const fresh = hits.filter((t) => now - t < windowMs);
+      if (fresh.length)
+        buckets.set(k, fresh);
+      else
+        buckets.delete(k);
+    }
+  };
+  return { limited, sweep };
+}, cosineDistance = (a, b) => {
+  if (a.length !== b.length || !a.length)
+    return null;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0;i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0)
+    return null;
+  return 1 - dot / (Math.sqrt(na) * Math.sqrt(nb));
+}, parseVector = (v) => {
+  if (typeof v !== "string" || !v)
+    return null;
+  try {
+    const arr = JSON.parse(v);
+    return Array.isArray(arr) && arr.every((n) => typeof n === "number") ? arr : null;
+  } catch {
+    return null;
+  }
+}, vecSearch = (rows, embedding, limit) => {
+  const scored = [];
+  for (const row of rows) {
+    const rowVec = parseVector(row.vector);
+    if (!rowVec)
+      continue;
+    const dist = cosineDistance(embedding, rowVec);
+    if (dist === null)
+      continue;
+    scored.push({ row: { ...row, _distance: dist }, dist });
+  }
+  scored.sort((x, y) => x.dist - y.dist);
+  return scored.slice(0, limit).map((s) => s.row);
+}, makeUser = (u) => ({
   id: u.id,
   email: u.email || null,
   role: u.role || "authenticated",
@@ -218,22 +277,49 @@ var DIR, CORS_ORIGIN, cors, json = (data, status = 200, extra = {}) => Response.
   expires_in: 604800,
   expires_at: Math.floor(exp / 1000),
   user
-}), issueSession = async (uid) => {
+}), hashToken = async (token) => {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Buffer.from(digest).toString("hex");
+}, timingSafeEqual = (a, b) => {
+  if (a.length !== b.length)
+    return false;
+  let diff = 0;
+  for (let i = 0;i < a.length; i++)
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}, issueSessionIn = async (client, uid) => {
   const token = crypto.randomUUID(), refresh = crypto.randomUUID();
   const exp = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  await db.execute({ sql: "INSERT INTO _sessions (token, refresh, uid, exp) VALUES (?, ?, ?, ?)", args: [token, refresh, uid, exp] });
+  const tokenHash = await hashToken(token), refreshHash = await hashToken(refresh);
+  await client.execute({ sql: "INSERT INTO _sessions (token, refresh, uid, exp) VALUES (?, ?, ?, ?)", args: [tokenHash, refreshHash, uid, exp] });
   return { token, refresh, exp };
-}, getUser = async (r) => {
+}, findSessionByTokenIn = async (client, token) => {
+  const tokenHash = await hashToken(token);
+  const sessions = await client.execute({ sql: "SELECT * FROM _sessions WHERE token=? AND exp>?", args: [tokenHash, Date.now()] });
+  const s = sessions.rows[0];
+  if (!s || !timingSafeEqual(String(s.token), tokenHash))
+    return null;
+  return s;
+}, deleteSessionByTokenIn = async (client, token) => {
+  const tokenHash = await hashToken(token);
+  await client.execute({ sql: "DELETE FROM _sessions WHERE token=?", args: [tokenHash] });
+}, getUserFromRequestIn = async (client, r) => {
   const token = r.headers.get("Authorization")?.split(" ")[1];
   if (!token)
     return null;
-  const sessions = await db.execute({ sql: "SELECT * FROM _sessions WHERE token=? AND exp>?", args: [token, Date.now()] });
-  const s = sessions.rows[0];
+  const s = await findSessionByTokenIn(client, token);
   if (!s)
     return null;
-  const users = await getRows("_users", `id = '${esc(s.uid)}'`);
+  const users = await getRowsIn(client, "_users", `id = '${esc(s.uid)}'`);
   return users[0] ? makeUser(users[0]) : null;
-}, NUM_LIT, cmp = (col, s, val) => NUM_LIT.test(val) ? `(${col} ${s} '${esc(val)}' OR ${col} ${s} CAST('${esc(val)}' AS NUMERIC))` : `${col} ${s} '${esc(val)}'`, toFilter = (p) => {
+}, sweepExpiredIn = async (client) => {
+  await client.execute({ sql: "DELETE FROM _sessions WHERE exp < ?", args: [Date.now()] }).catch(() => {});
+}, cmpExpr = (col, s, v) => {
+  if ((s === ">" || s === ">=" || s === "<" || s === "<=") && v !== "" && Number.isFinite(Number(v))) {
+    return `CAST(${col} AS REAL) ${s} ${Number(v)}`;
+  }
+  return `${col} ${s} '${v}'`;
+}, toFilter = (p) => {
   const skip = new Set(["select", "order", "limit", "offset", "vec", "count"]);
   const parts = [];
   for (const [k, val] of Object.entries(p)) {
@@ -243,7 +329,7 @@ var DIR, CORS_ORIGIN, cors, json = (data, status = 200, extra = {}) => Response.
       const col2 = k.slice(3);
       if (!validId(col2))
         continue;
-      const list = val.split(",").flatMap((v) => NUM_LIT.test(v) ? [`'${esc(v)}'`, v] : [`'${esc(v)}'`]).join(",");
+      const list = val.split(",").map((v) => `'${esc(v)}'`).join(",");
       parts.push(`${col2} IN (${list})`);
       continue;
     }
@@ -252,11 +338,11 @@ var DIR, CORS_ORIGIN, cors, json = (data, status = 200, extra = {}) => Response.
         const d1 = clause.indexOf("."), d2 = clause.indexOf(".", d1 + 1);
         if (d1 < 0 || d2 < 0)
           return null;
-        const col2 = clause.slice(0, d1), op2 = clause.slice(d1 + 1, d2), v = clause.slice(d2 + 1);
+        const col2 = clause.slice(0, d1), op2 = clause.slice(d1 + 1, d2), v = esc(clause.slice(d2 + 1));
         if (!validId(col2))
           return null;
         const s = op2 === "eq" ? "=" : op2 === "neq" ? "!=" : op2 === "gt" ? ">" : op2 === "gte" ? ">=" : op2 === "lt" ? "<" : op2 === "lte" ? "<=" : null;
-        return s ? cmp(col2, s, v) : null;
+        return s ? cmpExpr(col2, s, v) : null;
       }).filter(Boolean);
       if (orParts.length)
         parts.push(`(${orParts.join(" OR ")})`);
@@ -268,7 +354,7 @@ var DIR, CORS_ORIGIN, cors, json = (data, status = 200, extra = {}) => Response.
       if (!validId(col2))
         continue;
       const s = op2 === "eq" ? "=" : op2 === "neq" ? "!=" : op2 === "gt" ? ">" : op2 === "gte" ? ">=" : op2 === "lt" ? "<" : op2 === "lte" ? "<=" : "=";
-      parts.push(`NOT (${col2} ${s} '${esc(val)}')`);
+      parts.push(`NOT (${cmpExpr(col2, s, esc(val))})`);
       continue;
     }
     const op = k.match(/^(eq|neq|gt|gte|lt|lte|like|ilike|is)\./)?.[1];
@@ -289,11 +375,11 @@ var DIR, CORS_ORIGIN, cors, json = (data, status = 200, extra = {}) => Response.
       parts.push(`${col} IS ${upper}`);
     } else {
       const s = op === "eq" ? "=" : op === "neq" ? "!=" : op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : "<=";
-      parts.push(cmp(col, s, val));
+      parts.push(cmpExpr(col, s, safe));
     }
   }
   return parts.join(" AND ");
-};
+}, db, getAllRows = (name) => getAllRowsIn(db, name), tableNames = () => tableNamesIn(db);
 var init_db = __esm(() => {
   DIR = process.env.BUSYBASE_DIR || "busybase_data";
   CORS_ORIGIN = process.env.BUSYBASE_CORS_ORIGIN || "*";
@@ -302,19 +388,72 @@ var init_db = __esm(() => {
     "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Authorization,apikey,Prefer"
   };
-  mkdirSync(DIR, { recursive: true });
-  db = createClient({ url: `file:${DIR}/db.sqlite` });
-  NUM_LIT = /^-?\d+(\.\d+)?$/;
+  tableLocksByClient = new WeakMap;
+  db = openClient(DIR);
+});
+
+// src/realtime.ts
+var registry, sub = (ws, table) => {
+  ws.data.tables.add(table);
+  if (!registry.has(table))
+    registry.set(table, new Set);
+  registry.get(table).add(ws);
+}, unsub = (ws, table) => {
+  ws.data.tables.delete(table);
+  const subs = registry.get(table);
+  if (!subs)
+    return;
+  subs.delete(ws);
+  if (subs.size === 0)
+    registry.delete(table);
+}, broadcastChange = (table, eventType, newRow, oldRow) => {
+  const subs = registry.get(table);
+  if (!subs?.size)
+    return;
+  const msg = JSON.stringify({ event: eventType, table, eventType, new: newRow ?? null, old: oldRow ?? null });
+  for (const ws of subs) {
+    try {
+      ws.send(msg);
+    } catch (e) {
+      console.error(`[BusyBase] Realtime send failed for table "${table}":`, e);
+    }
+  }
+}, wsHandlers;
+var init_realtime = __esm(async () => {
+  init_db();
+  await init_hooks();
+  registry = new Map;
+  wsHandlers = {
+    open(ws) {
+      ws.data.tables = new Set;
+    },
+    message(ws, raw) {
+      (async () => {
+        try {
+          const msg = JSON.parse(typeof raw === "string" ? raw : raw.toString());
+          if (msg.type === "subscribe" && msg.table) {
+            if (!validId(msg.table))
+              return;
+            if (hooks.canAccess) {
+              const denied = await fireHook("canAccess", { user: ws.data.user ?? null, table: msg.table, method: "GET" });
+              if (denied)
+                return;
+            }
+            sub(ws, msg.table);
+          } else if (msg.type === "unsubscribe" && msg.table)
+            unsub(ws, msg.table);
+        } catch {}
+      })();
+    },
+    close(ws) {
+      for (const table of [...ws.data?.tables ?? []])
+        unsub(ws, table);
+    }
+  };
 });
 
 // src/auth.ts
-var nonces, resetTokens, importPubKey = (b642) => crypto.subtle.importKey("raw", Uint8Array.from(atob(b642), (c) => c.charCodeAt(0)), { name: "Ed25519" }, false, ["verify"]), initAuthTables = async () => {
-  await db.execute(`CREATE TABLE IF NOT EXISTS _users (
-    id TEXT, email TEXT, pw TEXT, pubkey TEXT, role TEXT,
-    meta TEXT, app_meta TEXT, created TEXT, updated TEXT, last_sign_in TEXT
-  )`);
-  await db.execute(`CREATE TABLE IF NOT EXISTS _sessions (token TEXT, refresh TEXT, uid TEXT, exp INTEGER)`);
-}, sweepExpired = async () => {
+var nonces, resetTokens, authRateLimiter, rateLimited, importPubKey = (b642) => crypto.subtle.importKey("raw", Uint8Array.from(atob(b642), (c) => c.charCodeAt(0)), { name: "Ed25519" }, false, ["verify"]), initAuthTables = (client = db) => initAuthTablesFor(client), sweepExpired = async (client = db) => {
   const now = Date.now();
   for (const [k, exp] of nonces)
     if (exp < now)
@@ -322,8 +461,12 @@ var nonces, resetTokens, importPubKey = (b642) => crypto.subtle.importKey("raw",
   for (const [k, v] of resetTokens)
     if (v.exp < now)
       resetTokens.delete(k);
-  await db.execute({ sql: "DELETE FROM _sessions WHERE exp < ?", args: [now] }).catch(() => {});
-}, handleAuth = async (action, req, B) => {
+  authRateLimiter.sweep();
+  await sweepExpiredIn(client);
+}, RATE_LIMITED_ACTIONS, handleAuth = async (client, action, req, B, ip = "unknown") => {
+  if (RATE_LIMITED_ACTIONS.has(action) && rateLimited(`${ip}:${action}`)) {
+    return err("Too many requests, please try again later", 429);
+  }
   if (action === "keypair" && req.method === "GET") {
     const nonce = crypto.randomUUID();
     nonces.set(nonce, Date.now() + 60000);
@@ -348,21 +491,20 @@ var nonces, resetTokens, importPubKey = (b642) => crypto.subtle.importKey("raw",
     if (!valid)
       return err("Signature verification failed", 401);
     const now = new Date().toISOString();
-    let users = await getRows("_users", `pubkey = '${esc(pubkey)}'`);
+    let users = await getRowsIn(client, "_users", `pubkey = '${esc(pubkey)}'`);
     let u = users[0];
     if (!u) {
       u = { id: crypto.randomUUID(), email: "", pw: "", pubkey, role: "authenticated", meta: "{}", app_meta: "{}", created: now, updated: now, last_sign_in: now };
-      await dbInsert("_users", u);
+      await dbInsertIn(client, "_users", u);
       const hookErr = await fireHook("onSignup", makeUser(u));
       if (hookErr)
         return err(hookErr, 400);
     } else {
-      await dbUpdate("_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
+      await dbUpdateIn(client, "_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
       u = { ...u, last_sign_in: now, updated: now };
     }
-    const { token, refresh, exp: sExp } = await issueSession(u.id);
+    const { token, refresh, exp: sExp } = await issueSessionIn(client, u.id);
     const user = makeUser(u);
-    await fireHook("onIssueSession", user);
     await fireHook("onSignin", user);
     return ok({ user, session: makeSession(token, refresh, sExp, user) });
   }
@@ -370,11 +512,11 @@ var nonces, resetTokens, importPubKey = (b642) => crypto.subtle.importKey("raw",
     if (!B.email || !B.password)
       return err("Email & password required");
     const emailLower = B.email.toLowerCase();
-    if ((await getRows("_users", `email = '${esc(emailLower)}'`)).length)
+    if ((await getRowsIn(client, "_users", `email = '${esc(emailLower)}'`)).length)
       return err("User already registered", 400, "Check if user already exists");
     const now = new Date().toISOString();
     const u = { id: crypto.randomUUID(), email: emailLower, pw: await Bun.password.hash(B.password), pubkey: "", role: "authenticated", meta: JSON.stringify(B.data || {}), app_meta: "{}", created: now, updated: now, last_sign_in: now };
-    await dbInsert("_users", u);
+    await dbInsertIn(client, "_users", u);
     const signupHookErr = await fireHook("onSignup", makeUser(u));
     if (signupHookErr)
       return err(signupHookErr, 400);
@@ -382,36 +524,35 @@ var nonces, resetTokens, importPubKey = (b642) => crypto.subtle.importKey("raw",
   }
   if (action === "token") {
     const emailLower = (B.email || "").toLowerCase();
-    const users = await getRows("_users", `email = '${esc(emailLower)}'`);
+    const users = await getRowsIn(client, "_users", `email = '${esc(emailLower)}'`);
     const u = users[0];
     if (!u || !await Bun.password.verify(B.password || "", u.pw))
       return err("Invalid login credentials", 400);
     const now = new Date().toISOString();
-    await dbUpdate("_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
-    const { token, refresh, exp } = await issueSession(u.id);
+    await dbUpdateIn(client, "_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
+    const { token, refresh, exp } = await issueSessionIn(client, u.id);
     const user = makeUser({ ...u, last_sign_in: now, updated: now });
-    await fireHook("onIssueSession", user);
     await fireHook("onSignin", user);
     return ok({ user, session: makeSession(token, refresh, exp, user) });
   }
   if (action === "user") {
-    const user = await getUser(req);
+    const user = await getUserFromRequestIn(client, req);
     if (!user)
       return err("Not authenticated", 401);
     return ok({ user });
   }
   if (action === "update") {
-    const user = await getUser(req);
+    const user = await getUserFromRequestIn(client, req);
     if (!user)
       return err("Not authenticated", 401);
-    const existing = await getRows("_users", `id = '${esc(user.id)}'`);
+    const existing = await getRowsIn(client, "_users", `id = '${esc(user.id)}'`);
     const u = existing[0];
     if (!u)
       return err("User not found", 404);
     const now = new Date().toISOString();
     const newEmail = B.email ? B.email.toLowerCase() : u.email;
     if (B.email && newEmail !== u.email) {
-      const taken = await getRows("_users", `email = '${esc(newEmail)}'`);
+      const taken = await getRowsIn(client, "_users", `email = '${esc(newEmail)}'`);
       if (taken.length)
         return err("Email already in use", 400);
       const emailHookErr = await fireHook("onEmailChange", makeUser(u), newEmail);
@@ -419,24 +560,20 @@ var nonces, resetTokens, importPubKey = (b642) => crypto.subtle.importKey("raw",
         return err(emailHookErr, 400);
     }
     const merged = { email: newEmail, pw: B.password ? await Bun.password.hash(B.password) : u.pw, meta: JSON.stringify({ ...JSON.parse(u.meta || "{}"), ...B.data || {} }), app_meta: JSON.stringify({ ...JSON.parse(u.app_meta || "{}"), ...B.app_metadata || {} }), updated: now };
-    await dbUpdate("_users", merged, `id = '${esc(u.id)}'`);
-    await fireHook("onUserUpdate", makeUser({ ...u, ...merged }), { email: B.email, password: !!B.password, data: B.data, app_metadata: B.app_metadata });
+    await dbUpdateIn(client, "_users", merged, `id = '${esc(u.id)}'`);
     return ok({ user: makeUser({ ...u, ...merged }) });
   }
   if (action === "logout") {
-    const user = await getUser(req);
     const token = req.headers.get("Authorization")?.split(" ")[1];
     if (token)
-      await dbDelete("_sessions", `token = '${esc(token)}'`).catch(() => {});
-    if (user)
-      await fireHook("onSignout", user);
+      await deleteSessionByTokenIn(client, token).catch(() => {});
     return ok({});
   }
   if (action === "recover") {
     const email = (B.email || "").toLowerCase();
     if (!email)
       return err("Email required");
-    const users = await getRows("_users", `email = '${esc(email)}'`);
+    const users = await getRowsIn(client, "_users", `email = '${esc(email)}'`);
     if (users[0]) {
       const resetToken = crypto.randomUUID();
       resetTokens.set(resetToken, { uid: users[0].id, exp: Date.now() + 60 * 60000 });
@@ -445,6 +582,8 @@ var nonces, resetTokens, importPubKey = (b642) => crypto.subtle.importKey("raw",
         const siteUrl = process.env.BUSYBASE_URL || `http://localhost:${process.env.BUSYBASE_PORT || 54321}`;
         await sendEmail(email, "Reset your password", `<p>Click <a href="${siteUrl}/auth/v1/verify?token=${resetToken}&type=recovery">here</a> to reset your password. This link expires in 1 hour.</p>`);
       }
+    } else {
+      await hashToken(crypto.randomUUID());
     }
     return ok({});
   }
@@ -459,32 +598,38 @@ var nonces, resetTokens, importPubKey = (b642) => crypto.subtle.importKey("raw",
       if (!password)
         return err("New password required");
       resetTokens.delete(token);
-      const users = await getRows("_users", `id = '${esc(entry.uid)}'`);
+      const users = await getRowsIn(client, "_users", `id = '${esc(entry.uid)}'`);
       const u = users[0];
       if (!u)
         return err("User not found", 404);
       const now = new Date().toISOString();
-      await dbUpdate("_users", { pw: await Bun.password.hash(password), updated: now }, `id = '${esc(u.id)}'`);
-      const { token: access, refresh, exp } = await issueSession(u.id);
+      await dbUpdateIn(client, "_users", { pw: await Bun.password.hash(password), updated: now }, `id = '${esc(u.id)}'`);
+      const { token: access, refresh, exp } = await issueSessionIn(client, u.id);
       return ok({ user: makeUser({ ...u, updated: now }), session: makeSession(access, refresh, exp, makeUser({ ...u, updated: now })) });
     }
     return err("Invalid verification type", 400);
   }
   return null;
-};
+}, handleAuthDefault = (action, req, B, ip = "unknown") => handleAuth(db, action, req, B, ip);
 var init_auth = __esm(async () => {
   init_db();
   await init_hooks();
   nonces = new Map;
   resetTokens = new Map;
+  authRateLimiter = makeRateLimiter(60000, 10);
+  rateLimited = authRateLimiter.limited;
+  RATE_LIMITED_ACTIONS = new Set(["signup", "token", "recover", "keypair"]);
 });
 
 // src/rest.ts
-var handleRest = async (table, req, P, B) => {
+var restRateLimiter, handleRest = async (client, table, req, P, B, broadcast = broadcastChange, ip = "unknown") => {
   if (!validId(table))
     return err("Invalid table name");
+  const isMutating = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE";
+  if (isMutating && restRateLimiter.limited(ip))
+    return err("Too many requests, please try again later", 429);
   if (hooks.canAccess) {
-    const reqUser = await getUser(req).catch(() => null);
+    const reqUser = await getUserFromRequestIn(client, req).catch(() => null);
     const denied = await fireHook("canAccess", { user: reqUser, table, method: req.method });
     if (denied)
       return err(denied, 403);
@@ -494,23 +639,55 @@ var handleRest = async (table, req, P, B) => {
   if (req.method === "GET") {
     const paramsHooked = await pipeHook("beforeSelect", P, table);
     const filter = toFilter(paramsHooked);
-    let rows = filter ? await getRows(table, filter) : await getAllRows(table);
+    let rows = filter ? await getRowsIn(client, table, filter) : await getAllRowsIn(client, table);
     rows = await pipeHook("afterSelect", rows, table);
-    if (P.select && P.select !== "*") {
-      const cols = P.select.split(",").filter((c) => validId(c));
-      rows = rows.map((r) => Object.fromEntries(cols.map((c) => [c, r[c]])));
+    let isVecSearch = false;
+    if (paramsHooked.vec) {
+      let embedding;
+      try {
+        embedding = JSON.parse(paramsHooked.vec);
+      } catch {
+        return err("Invalid vec: must be a JSON array of numbers");
+      }
+      if (!Array.isArray(embedding) || !embedding.every((n) => typeof n === "number"))
+        return err("Invalid vec: must be a JSON array of numbers");
+      isVecSearch = true;
+      rows = vecSearch(rows, embedding, Math.max(0, parseInt(paramsHooked.limit) || 10));
     }
-    if (P.order) {
-      const [col, dir] = P.order.split(".");
-      if (validId(col))
-        rows.sort((a, b) => dir === "desc" ? b[col] > a[col] ? 1 : -1 : a[col] > b[col] ? 1 : -1);
+    let knownCols = rows.length ? new Set(Object.keys(rows[0])) : null;
+    if (!knownCols && (paramsHooked.select && paramsHooked.select !== "*" || paramsHooked.order) && await tableExistsIn(client, table)) {
+      knownCols = await getTableColumnsIn(client, table);
     }
-    const limit = Math.max(0, parseInt(P.limit) || 1000);
-    const offset = Math.max(0, parseInt(P.offset) || 0);
+    if (paramsHooked.select && paramsHooked.select !== "*") {
+      const requested = paramsHooked.select.split(",");
+      const invalidSyntax = requested.filter((c) => !validId(c) && c !== "_distance");
+      if (invalidSyntax.length)
+        return err(`Invalid column name in select: ${invalidSyntax.join(", ")}`);
+      const unknown = knownCols ? requested.filter((c) => !knownCols.has(c) && c !== "_distance") : [];
+      if (unknown.length)
+        return err(`Unknown column in select: ${unknown.join(", ")}`);
+      rows = rows.map((r) => Object.fromEntries(requested.map((c) => [c, r[c]])));
+    }
+    if (paramsHooked.order) {
+      const [col, dir] = paramsHooked.order.split(".");
+      if (!validId(col) && col !== "_distance")
+        return err(`Invalid column name in order: ${col}`);
+      if (knownCols && !knownCols.has(col) && col !== "_distance")
+        return err(`Unknown column in order: ${col}`);
+      const numCmp = (x, y) => {
+        const nx = Number(x), ny = Number(y);
+        if (x !== "" && x != null && y !== "" && y != null && Number.isFinite(nx) && Number.isFinite(ny))
+          return nx - ny;
+        return x > y ? 1 : x < y ? -1 : 0;
+      };
+      rows.sort((a, b) => dir === "desc" ? numCmp(b[col], a[col]) : numCmp(a[col], b[col]));
+    }
+    const limit = isVecSearch ? rows.length : Math.max(0, parseInt(paramsHooked.limit) || 1000);
+    const offset = isVecSearch ? 0 : Math.max(0, parseInt(paramsHooked.offset) || 0);
     const page = clean(rows).slice(offset, offset + limit);
     const rangeEnd = page.length ? offset + page.length - 1 : 0;
     const extra = {};
-    if (P.count === "exact" || prefer.includes("count=exact")) {
+    if (paramsHooked.count === "exact" || prefer.includes("count=exact")) {
       extra["Content-Range"] = page.length ? `${offset}-${rangeEnd}/${rows.length}` : `*`;
       return Response.json({ data: page, error: null, count: rows.length }, { status: 200, headers: { ...cors, ...extra } });
     }
@@ -527,15 +704,11 @@ var handleRest = async (table, req, P, B) => {
     if (preErr)
       return err(preErr, 400);
     rows = await pipeHook("afterInsert", rows.map((r) => ({ id: r.id ?? crypto.randomUUID(), ...r })), table);
-    const tExists = await openTbl(table);
-    if (!tExists)
-      await mkTbl(table, rows[0]);
-    else
-      await ensureCols(table, rows[0]);
+    await ensureTableIn(client, table, rows[0]);
     for (const row of rows)
-      await dbInsert(table, row);
+      await dbInsertIn(client, table, row);
     for (const row of clean(rows))
-      broadcastChange(table, "INSERT", row, null);
+      broadcast(table, "INSERT", row, null);
     if (returnMinimal)
       return new Response(null, { status: 204, headers: cors });
     return ok(clean(rows), 201);
@@ -544,22 +717,22 @@ var handleRest = async (table, req, P, B) => {
     const filter = toFilter(P);
     if (!filter)
       return err("No filter provided");
-    if (!await openTbl(table))
+    if (!await openTblIn(client, table))
       return err("Table not found", 404);
-    const data = Array.isArray(B) ? B[0] : B;
-    if (Object.keys(data).some((k) => !validId(k)))
-      return err("Invalid column name");
-    let existing = await getRows(table, filter);
+    if (Array.isArray(B))
+      return err("Array body not supported for PUT/PATCH; update rows individually or by id");
+    const data = B;
+    let existing = await getRowsIn(client, table, filter);
     if (!existing.length)
       return ok([]);
     const preErr = await fireHook("beforeUpdate", table, existing, data);
     if (preErr)
       return err(preErr, 400);
-    await dbUpdate(table, data, filter);
+    await dbUpdateIn(client, table, data, filter);
     let updated = existing.map((r) => ({ ...r, ...data }));
     updated = await pipeHook("afterUpdate", updated, table);
     for (let i = 0;i < updated.length; i++)
-      broadcastChange(table, "UPDATE", clean([updated[i]])[0], clean([existing[i]])[0]);
+      broadcast(table, "UPDATE", clean([updated[i]])[0], clean([existing[i]])[0]);
     if (returnMinimal)
       return new Response(null, { status: 204, headers: cors });
     return ok(clean(updated));
@@ -568,108 +741,170 @@ var handleRest = async (table, req, P, B) => {
     const filter = toFilter(P);
     if (!filter)
       return err("No filter provided");
-    if (!await openTbl(table))
+    if (!await openTblIn(client, table))
       return err("Table not found", 404);
-    const toDelete = await getRows(table, filter);
+    const toDelete = await getRowsIn(client, table, filter);
     const preErr = await fireHook("beforeDelete", table, toDelete);
     if (preErr)
       return err(preErr, 400);
-    await dbDelete(table, filter);
+    await dbDeleteIn(client, table, filter);
     await fireHook("afterDelete", table, toDelete);
     for (const row of clean(toDelete))
-      broadcastChange(table, "DELETE", null, row);
+      broadcast(table, "DELETE", null, row);
     if (returnMinimal)
       return new Response(null, { status: 204, headers: cors });
     return ok([]);
   }
   return err("Method not allowed", 405);
-};
+}, handleRestDefault = (table, req, P, B, ip = "unknown") => handleRest(db, table, req, P, B, broadcastChange, ip);
 var init_rest = __esm(async () => {
-  init_realtime();
   init_db();
-  await init_hooks();
+  await __promiseAll([
+    init_hooks(),
+    init_realtime()
+  ]);
+  restRateLimiter = makeRateLimiter(60000, 300);
 });
 
 // src/server.ts
 var exports_server = {};
-var PORT, UNIX_SOCKET, mime, ext = (p) => p.slice(p.lastIndexOf(".")) || "", server;
+var PORT, HOST, UNIX_SOCKET, STUDIO_TOKEN, MAX_REQUEST_BODY_SIZE, mime, ext = (p) => p.slice(p.lastIndexOf(".")) || "", studioAuthorized = (req, searchParams) => {
+  if (!STUDIO_TOKEN)
+    return true;
+  const bearer = req.headers.get("Authorization")?.split(" ")[1];
+  const qtoken = searchParams.get("token");
+  return bearer === STUDIO_TOKEN || qtoken === STUDIO_TOKEN;
+}, server, shuttingDown = false, shutdown = (signal) => {
+  if (shuttingDown)
+    return;
+  shuttingDown = true;
+  console.log(`[BusyBase] Received ${signal}, shutting down gracefully...`);
+  server.stop();
+  db.close();
+  process.exit(0);
+};
 var init_server = __esm(async () => {
-  init_realtime();
   init_db();
   await __promiseAll([
     init_hooks(),
+    init_realtime(),
     init_auth(),
     init_rest()
   ]);
   PORT = process.env.BUSYBASE_PORT || 54321;
+  HOST = process.env.BUSYBASE_HOST || "127.0.0.1";
   UNIX_SOCKET = process.env.BUSYBASE_UNIX_SOCKET || null;
+  STUDIO_TOKEN = process.env.BUSYBASE_STUDIO_TOKEN;
+  MAX_REQUEST_BODY_SIZE = parseInt(process.env.BUSYBASE_MAX_BODY_SIZE || "") || 10 * 1024 * 1024;
+  if (!process.env.BUSYBASE_CORS_ORIGIN && false) {}
   await initAuthTables();
-  setInterval(sweepExpired, 5 * 60000).unref();
-  mime = { ".js": "text/javascript", ".html": "text/html", ".css": "text/css" };
-  server = Bun.serve({ ...UNIX_SOCKET ? { unix: UNIX_SOCKET } : { port: PORT }, websocket: wsHandlers, fetch: async (req) => {
-    if (req.headers.get("upgrade") === "websocket" && new URL(req.url).pathname === "/realtime/v1/websocket") {
-      const upgraded = server.upgrade(req, { data: { tables: new Set } });
-      return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
-    }
-    if (req.method === "OPTIONS")
-      return new Response(null, { status: 204, headers: cors });
-    if (hooks.onRequest) {
-      const r = await hooks.onRequest(req);
-      if (r)
-        return r;
-    }
-    const { pathname, searchParams } = new URL(req.url);
-    const P = Object.fromEntries(searchParams);
-    const hasBody = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE";
-    const B = hasBody ? await req.json().catch(() => ({})) : {};
-    if (pathname.startsWith("/auth/v1/")) {
-      const action = pathname.split("/")[3];
-      const result = await handleAuth(action, req, B);
-      return result ?? err("Not found", 404);
-    }
-    if (pathname.startsWith("/rest/v1/")) {
-      const table = pathname.slice(9).split("/").map(decodeURIComponent).filter(Boolean)[0];
-      if (!table)
-        return err("Table required");
-      return handleRest(table, req, P, B);
-    }
-    if (pathname === "/studio/config") {
-      const data = { BUSYBASE_DIR: process.env.BUSYBASE_DIR || "busybase_data", BUSYBASE_PORT: String(PORT), BUSYBASE_CORS_ORIGIN: process.env.BUSYBASE_CORS_ORIGIN || "*" };
-      return Response.json({ data, error: null }, { headers: cors });
-    }
-    if (pathname === "/studio/api/tables") {
-      const data = await tableNames();
-      return Response.json({ data, error: null }, { headers: cors });
-    }
-    if (pathname === "/studio/api/users") {
-      const rows = await getAllRows("_users");
-      return Response.json({ data: clean(rows), error: null }, { headers: cors });
-    }
-    if (pathname === "/studio" || pathname === "/studio/") {
-      const file = Bun.file(new URL("../studio/index.html", import.meta.url));
-      if (await file.exists())
-        return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
-      return err("Studio not found", 404);
-    }
-    if (pathname.startsWith("/studio/")) {
-      const name = pathname.slice(8);
-      if (name && !name.includes("..")) {
-        const file = Bun.file(new URL(`../studio/${name}`, import.meta.url));
+  setInterval(() => sweepExpired(), 5 * 60000).unref();
+  setInterval(() => restRateLimiter.sweep(), 5 * 60000).unref();
+  mime = {
+    ".js": "text/javascript",
+    ".html": "text/html",
+    ".css": "text/css"
+  };
+  server = Bun.serve({
+    ...UNIX_SOCKET ? { unix: UNIX_SOCKET } : { hostname: HOST, port: PORT },
+    maxRequestBodySize: MAX_REQUEST_BODY_SIZE,
+    websocket: wsHandlers,
+    fetch: async (req) => {
+      if (req.headers.get("upgrade") === "websocket" && new URL(req.url).pathname === "/realtime/v1/websocket") {
+        const wsToken = req.headers.get("Authorization")?.split(" ")[1] || new URL(req.url).searchParams.get("token");
+        const wsUser = wsToken ? await getUserFromRequestIn(db, new Request(req.url, { headers: { Authorization: `Bearer ${wsToken}` } })).catch(() => null) : null;
+        const upgraded = server.upgrade(req, { data: { tables: new Set, user: wsUser } });
+        return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
+      }
+      if (req.method === "OPTIONS")
+        return new Response(null, { status: 204, headers: cors });
+      const { pathname, searchParams } = new URL(req.url);
+      if (pathname === "/healthz")
+        return Response.json({ status: "ok" }, { headers: cors });
+      if (hooks.onRequest) {
+        const r = await hooks.onRequest(req);
+        if (r)
+          return r;
+      }
+      const P = Object.fromEntries(searchParams);
+      const hasBody = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE";
+      const B = hasBody ? await req.json().catch(() => ({})) : {};
+      if (pathname.startsWith("/auth/v1/")) {
+        const action = pathname.split("/")[3];
+        const ip = server.requestIP(req)?.address || "unknown";
+        const result = await handleAuthDefault(action, req, B, ip);
+        return result ?? err("Not found", 404);
+      }
+      if (pathname.startsWith("/rest/v1/")) {
+        const table = pathname.slice(9).split("/").map(decodeURIComponent).filter(Boolean)[0];
+        if (!table)
+          return err("Table required");
+        const ip = server.requestIP(req)?.address || "unknown";
+        return handleRestDefault(table, req, P, B, ip);
+      }
+      if (pathname === "/studio" || pathname === "/studio/" || pathname.startsWith("/studio/")) {
+        if (!studioAuthorized(req, searchParams))
+          return err("Studio access requires a valid token", 401);
+      }
+      if (pathname === "/studio/config") {
+        const data = {
+          BUSYBASE_DIR: process.env.BUSYBASE_DIR || "busybase_data",
+          BUSYBASE_PORT: String(PORT),
+          BUSYBASE_CORS_ORIGIN: process.env.BUSYBASE_CORS_ORIGIN || "*"
+        };
+        return Response.json({ data, error: null }, { headers: cors });
+      }
+      if (pathname === "/studio/api/tables") {
+        const data = await tableNames();
+        return Response.json({ data, error: null }, { headers: cors });
+      }
+      if (pathname === "/studio/api/users") {
+        const rows = await getAllRows("_users");
+        return Response.json({ data: clean(rows), error: null }, { headers: cors });
+      }
+      if (pathname === "/studio") {
+        const redirectUrl = new URL(req.url);
+        redirectUrl.pathname = "/studio/";
+        return new Response(null, {
+          status: 301,
+          headers: { Location: redirectUrl.pathname + redirectUrl.search, ...cors }
+        });
+      }
+      if (pathname === "/studio/") {
+        const file = Bun.file(new URL("../studio/index.html", import.meta.url));
         if (await file.exists())
-          return new Response(file, { headers: { "Content-Type": mime[ext(name)] || "application/octet-stream", ...cors } });
+          return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
+        return err("Studio not found", 404);
+      }
+      if (pathname.startsWith("/studio/")) {
+        const name = pathname.slice(8);
+        if (name && !name.includes("..")) {
+          const file = Bun.file(new URL(`../studio/${name}`, import.meta.url));
+          if (await file.exists())
+            return new Response(file, {
+              headers: { "Content-Type": mime[ext(name)] || "application/octet-stream", ...cors }
+            });
+        }
+        return err("Not found", 404);
+      }
+      const staticRoutes = {
+        "/": "./gui.html",
+        "/gui": "./gui.html",
+        "/docs": "../docs/docs.html",
+        "/site": "../docs/index.html"
+      };
+      if (pathname in staticRoutes) {
+        const file = Bun.file(new URL(staticRoutes[pathname], import.meta.url));
+        if (await file.exists())
+          return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
+        return err("Not found", 404);
       }
       return err("Not found", 404);
     }
-    const staticRoutes = { "/": "./gui.html", "/gui": "./gui.html", "/docs": "../docs/docs.html", "/site": "../docs/index.html" };
-    if (pathname in staticRoutes) {
-      const file = Bun.file(new URL(staticRoutes[pathname], import.meta.url));
-      if (await file.exists())
-        return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
-      return err("Not found", 404);
-    }
-    return err("Not found", 404);
-  } });
-  console.log(UNIX_SOCKET ? `BusyBase: unix socket ${UNIX_SOCKET}` : `BusyBase: http://localhost:${PORT}  |  Studio: http://localhost:${PORT}/studio`);
+  });
+  console.log(`BusyBase: http://localhost:${PORT}  |  Studio: http://localhost:${PORT}/studio`);
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 });
 
 // src/sdk.ts
@@ -718,35 +953,30 @@ var BB = (url, key) => {
   const keypair = {
     generate: genKeypair,
     signIn: async (privkeyB64) => {
-      try {
-        let privkey = privkeyB64 ?? store.getItem("_bb_privkey");
-        let pubkey = store.getItem("_bb_pubkey");
-        if (!privkey) {
-          const kp = await genKeypair();
-          privkey = kp.privkey;
-          pubkey = kp.pubkey;
-          store.setItem("_bb_privkey", privkey);
-          store.setItem("_bb_pubkey", pubkey);
-        } else if (!pubkey) {
-          const privCrypto = await crypto.subtle.importKey("pkcs8", unb64(privkey), { name: "Ed25519" }, true, ["sign"]);
-          return { data: null, error: { message: "Pubkey missing \u2014 call keypair.restore(privkey, pubkey)" } };
-        }
-        const nonceRes = await req("auth/v1/keypair");
-        if (nonceRes.error)
-          return nonceRes;
-        const nonce = nonceRes.data.nonce;
-        const signature = await sign(privkey, nonce);
-        const r = await req("auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature }) });
-        if (r.data?.session) {
-          setSession_(r.data.session);
-          store.setItem("_bb_privkey", privkey);
-          store.setItem("_bb_pubkey", pubkey);
-          emit("SIGNED_IN", session);
-        }
-        return r;
-      } catch (e) {
-        return { data: null, error: { message: e?.message || "Keypair sign-in failed" } };
+      let privkey = privkeyB64 ?? store.getItem("_bb_privkey");
+      let pubkey = store.getItem("_bb_pubkey");
+      if (!privkey) {
+        const kp = await genKeypair();
+        privkey = kp.privkey;
+        pubkey = kp.pubkey;
+        store.setItem("_bb_privkey", privkey);
+        store.setItem("_bb_pubkey", pubkey);
+      } else if (!pubkey) {
+        return { data: null, error: { message: "Pubkey missing \u2014 call keypair.restore(privkey, pubkey)" } };
       }
+      const nonceRes = await req("auth/v1/keypair");
+      if (nonceRes.error)
+        return nonceRes;
+      const nonce = nonceRes.data.nonce;
+      const signature = await sign(privkey, nonce);
+      const r = await req("auth/v1/keypair", { method: "POST", body: JSON.stringify({ pubkey, nonce, signature }) });
+      if (r.data?.session) {
+        setSession_(r.data.session);
+        store.setItem("_bb_privkey", privkey);
+        store.setItem("_bb_pubkey", pubkey);
+        emit("SIGNED_IN", session);
+      }
+      return r;
     },
     restore: async (privkey, pubkey) => {
       store.setItem("_bb_privkey", privkey);
@@ -763,7 +993,7 @@ var BB = (url, key) => {
     }
   };
   const Q = (table, method, body) => {
-    const q = { filters: [], order: "", limit: 0, offset: 0, select: "*", count: "" };
+    const q = { filters: [], order: "", limit: 0, offset: 0, select: "*", vec: "", count: "" };
     let _single = false, _maybeSingle = false;
     const qs = () => {
       const p = [`select=${q.select}`, ...q.filters];
@@ -773,6 +1003,8 @@ var BB = (url, key) => {
         p.push(`limit=${q.limit}`);
       if (q.offset)
         p.push(`offset=${q.offset}`);
+      if (q.vec)
+        p.push(`vec=${encodeURIComponent(q.vec)}`);
       if (q.count)
         p.push(`count=${q.count}`);
       return p.join("&");
@@ -814,6 +1046,7 @@ var BB = (url, key) => {
       count: (type = "exact") => (q.count = type, b),
       single: () => (_single = true, b),
       maybeSingle: () => (_maybeSingle = true, b),
+      vec: (embedding, limit = 10) => (q.vec = JSON.stringify(embedding), q.limit = limit, b),
       then: (res, rej) => resolve().then(res, rej)
     };
     return b;
@@ -869,7 +1102,7 @@ var BB = (url, key) => {
       setSession_(s);
       return Promise.resolve({ data: { session: s }, error: null });
     },
-    resetPasswordForEmail: (_email) => Promise.resolve({ data: {}, error: null }),
+    resetPasswordForEmail: (email) => req("auth/v1/recover", { method: "POST", body: JSON.stringify({ email }) }),
     onAuthStateChange: (cb) => {
       authListeners.push(cb);
       cb("INITIAL_SESSION", session);
@@ -993,6 +1226,21 @@ if (cmd === "serve") {
   let q = db2.from(table).delete();
   q = parseFilter(q, filters);
   const r = await q;
+  print(r);
+} else if (cmd === "vec") {
+  const [table, jsonStr, limitStr] = args;
+  if (!table || !jsonStr)
+    die("Usage: busybase vec <table> <embedding-json> [limit]");
+  const embedding = (() => {
+    try {
+      return JSON.parse(jsonStr);
+    } catch {
+      return null;
+    }
+  })();
+  if (!Array.isArray(embedding))
+    die("Embedding must be a JSON array, e.g. '[1,0,0,0]'");
+  const r = await db2.from(table).select("*").vec(embedding, limitStr ? parseInt(limitStr) : 10);
   print(r);
 } else if (cmd === "test") {
   let pass = 0, fail = 0;
@@ -1130,6 +1378,34 @@ Testing against ${URL2}
   const sel = await db2.from(tbl).select("name");
   check(".select(cols) \u2014 only name key", sel.data?.[0] && Object.keys(sel.data[0]).length === 1, sel.data?.[0]);
   console.log(`
+[vector search]`);
+  const vecTbl = `vec_${Date.now()}`;
+  await db2.from(vecTbl).insert([
+    { label: "cats", vector: JSON.stringify([0.9, 0.1, 0, 0]) },
+    { label: "dogs", vector: JSON.stringify([0.1, 0.9, 0, 0]) },
+    { label: "no_vector" }
+  ]);
+  const vecRes = await db2.from(vecTbl).select("*").vec([0.85, 0.15, 0, 0], 5);
+  check(".vec \u2014 returns {data,error}", vecRes.data !== undefined && "error" in vecRes, vecRes);
+  check(".vec \u2014 closest match is cats", vecRes.data?.[0]?.label === "cats", vecRes.data);
+  check(".vec \u2014 includes _distance", typeof vecRes.data?.[0]?._distance === "number", vecRes.data?.[0]);
+  check(".vec \u2014 excludes rows without a vector", vecRes.data?.every((r) => r.label !== "no_vector"), vecRes.data);
+  check(".vec \u2014 sorted ascending by _distance", (vecRes.data?.length ?? 0) < 2 || vecRes.data[0]._distance <= vecRes.data[1]._distance, vecRes.data);
+  const vecLimited = await db2.from(vecTbl).select("*").vec([0.85, 0.15, 0, 0], 1);
+  check(".vec \u2014 limit respected", vecLimited.data?.length === 1, vecLimited.data);
+  console.log(`
+[column validation]`);
+  const badSelectNonEmpty = await db2.from(tbl).select("bogus_col");
+  check("select unknown column (non-empty result set) \u2014 400", !!badSelectNonEmpty.error, badSelectNonEmpty);
+  const badOrderNonEmpty = await db2.from(tbl).select("*").order("bogus_col");
+  check("order unknown column (non-empty result set) \u2014 400", !!badOrderNonEmpty.error, badOrderNonEmpty);
+  const badSelectEmpty = await db2.from(tbl).select("bogus_col").eq("name", "NoSuchPersonAtAll");
+  check("select unknown column (empty result set) \u2014 400", !!badSelectEmpty.error, badSelectEmpty);
+  const badOrderEmpty = await db2.from(tbl).select("*").eq("name", "NoSuchPersonAtAll").order("bogus_col");
+  check("order unknown column (empty result set) \u2014 400", !!badOrderEmpty.error, badOrderEmpty);
+  const goodSelectEmpty = await db2.from(tbl).select("name").eq("name", "NoSuchPersonAtAll");
+  check("select known column (empty result set) \u2014 ok", !goodSelectEmpty.error, goodSelectEmpty);
+  console.log(`
 [update + delete]`);
   const upd = await db2.from(tbl).update({ score: "99" }).eq("name", "Alice");
   check(".update.eq \u2014 score=99", upd.data?.[0]?.score === "99", upd.data);
@@ -1159,7 +1435,7 @@ Testing against ${URL2}
   const ss = await db2.auth.setSession({ access_token: "fake", refresh_token: "fake" });
   check("setSession returns {data,error}", ss.data !== undefined && "error" in ss, ss);
   const rpf = await db2.auth.resetPasswordForEmail("anyone@example.com");
-  check("resetPasswordForEmail stub ok", !rpf.error, rpf);
+  check("resetPasswordForEmail hits real /auth/v1/recover endpoint", !rpf.error, rpf);
   const rtTbl = `rt_${Date.now()}`;
   console.log(`
 [realtime \u2014 table: ${rtTbl}]`);
@@ -1227,6 +1503,28 @@ Testing against ${URL2}
   check("realtime DELETE event.new is null", rtDel?.new === null, rtDel);
   check("realtime DELETE old.name=rt_alice", rtDel?.old?.name === "rt_alice", rtDel);
   ws1.close();
+  const rtAuthTbl = `rtauth_${Date.now()}`;
+  const kpReauth = await db2.auth.keypair.signIn();
+  const authToken = kpReauth.data?.session?.access_token;
+  const ws2 = new globalThis.WebSocket(`${wsUrl}?token=${authToken}`);
+  await wsWait(ws2, "open");
+  ws2.send(JSON.stringify({ type: "subscribe", table: rtAuthTbl }));
+  const recv4 = new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error("timeout authenticated subscribe INSERT")), 3000);
+    ws2.onmessage = (e) => {
+      clearTimeout(t);
+      res(JSON.parse(typeof e.data === "string" ? e.data : e.data.toString()));
+    };
+  });
+  await db2.from(rtAuthTbl).insert({ name: "auth_probe" });
+  let rtAuthMsg;
+  try {
+    rtAuthMsg = await recv4;
+  } catch {
+    rtAuthMsg = null;
+  }
+  check("realtime subscribe with ?token= still receives events", rtAuthMsg?.eventType === "INSERT", rtAuthMsg);
+  ws2.close();
   const rtTbl2 = `rt2_${Date.now()}`;
   const chEvents = [];
   const ch = db2.channel("test-ch").on("postgres_changes", { event: "*", schema: "public", table: rtTbl2 }, (payload) => chEvents.push(payload)).subscribe();
@@ -1253,6 +1551,7 @@ Commands:
   query <table> [col=val ...]      Query with filters
   update <table> <json> [col=val]  Update rows
   delete <table> <col=val> ...     Delete rows
+  vec <table> <embedding-json> [limit]  Vector similarity search
 
 Environment:
   BUSYBASE_URL   Server URL (default: http://localhost:54321)

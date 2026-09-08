@@ -9,17 +9,25 @@ var b64e = (s) => Buffer.from(s).toString("base64");
 var smtpSend = async (to, subject, html) => {
   if (!smtpHost)
     return false;
-  const lines = [];
+  let buffer = "";
   let notify = null;
+  const useTls = smtpPort === 465;
+  const isTerminalReplyLine = (line) => !!line && /^\d{3} /.test(line);
+  const isMultiLineReplyComplete = (buf) => {
+    const lines = buf.split(`\r
+`).filter(Boolean);
+    return isTerminalReplyLine(lines[lines.length - 1]);
+  };
   const conn = await Bun.connect({
     hostname: smtpHost,
     port: smtpPort,
+    tls: useTls,
     socket: {
       open() {},
       data(_s, d) {
-        lines.push(...d.toString().split(`\r
-`).filter(Boolean));
-        notify?.();
+        buffer += d.toString();
+        if (isMultiLineReplyComplete(buffer))
+          notify?.();
       },
       error(_s, e) {
         console.error("[SMTP]", e);
@@ -29,26 +37,34 @@ var smtpSend = async (to, subject, html) => {
   });
   const send = (l) => conn.write(l + `\r
 `);
-  const wait = () => new Promise((r) => {
-    notify = r;
-    setTimeout(r, 3000);
+  const wait = (label) => new Promise((resolve, reject) => {
+    buffer = "";
+    notify = () => resolve(buffer.split(`\r
+`).filter(Boolean));
+    setTimeout(() => reject(new Error(`SMTP ${label} timed out waiting for a complete reply: ${JSON.stringify(buffer)}`)), 15000);
   });
+  const expectOk = async (label) => {
+    const lines = await wait(label);
+    const code = parseInt(lines[lines.length - 1]?.slice(0, 3) || "0");
+    if (code >= 400 || code === 0)
+      throw new Error(`SMTP ${label} failed: ${lines.join(" ") || "no response"}`);
+  };
   try {
-    await wait();
+    await expectOk("connect");
     send("EHLO busybase");
-    await wait();
+    await expectOk("EHLO");
     send("AUTH LOGIN");
-    await wait();
+    await expectOk("AUTH LOGIN");
     send(b64e(smtpUser));
-    await wait();
+    await expectOk("AUTH username");
     send(b64e(smtpPass));
-    await wait();
+    await expectOk("AUTH password");
     send(`MAIL FROM:<${smtpFrom}>`);
-    await wait();
+    await expectOk("MAIL FROM");
     send(`RCPT TO:<${to}>`);
-    await wait();
+    await expectOk("RCPT TO");
     send("DATA");
-    await wait();
+    await expectOk("DATA");
     send(`From: ${smtpFrom}\r
 To: ${to}\r
 Subject: ${subject}\r
@@ -57,7 +73,7 @@ Content-Type: text/html; charset=utf-8\r
 \r
 ${html}\r
 .`);
-    await wait();
+    await expectOk("message body");
     send("QUIT");
   } finally {
     conn.end();
@@ -75,8 +91,8 @@ if (hooksFile) {
   }
 }
 var hooks = userHooks;
-var fireHook = async (name, ...args) => {
-  const fn = hooks[name];
+var fireHookOn = async (h, name, ...args) => {
+  const fn = h[name];
   if (!fn)
     return null;
   try {
@@ -86,12 +102,13 @@ var fireHook = async (name, ...args) => {
     if (r && typeof r === "object" && typeof r.error === "string")
       return r.error;
   } catch (e) {
-    return e?.message || String(e);
+    console.error(`[BusyBase] Hook "${String(name)}" threw:`, e);
+    return "Internal error";
   }
   return null;
 };
-var pipeHook = async (name, value, ...args) => {
-  const fn = hooks[name];
+var pipeHookOn = async (h, name, value, ...args) => {
+  const fn = h[name];
   if (!fn)
     return value;
   try {
@@ -101,57 +118,22 @@ var pipeHook = async (name, value, ...args) => {
   } catch {}
   return value;
 };
-var sendEmail = async (to, subject, html, text = "") => {
-  if (hooks.sendEmail) {
-    await hooks.sendEmail({ to, subject, html, text });
+var fireHook = (name, ...args) => fireHookOn(hooks, name, ...args);
+var pipeHook = (name, value, ...args) => pipeHookOn(hooks, name, value, ...args);
+var sendEmailOn = async (h, to, subject, html, text = "") => {
+  if (h.sendEmail) {
+    await h.sendEmail({ to, subject, html, text });
     return;
   }
-  const sent = await smtpSend(to, subject, html);
-  if (!sent)
-    console.log(`[BusyBase] No email transport configured. Would send to ${to}: ${subject}`);
-};
-
-// src/realtime.ts
-var registry = new Map;
-var sub = (ws, table) => {
-  ws.data.tables.add(table);
-  if (!registry.has(table))
-    registry.set(table, new Set);
-  registry.get(table).add(ws);
-};
-var unsub = (ws, table) => {
-  ws.data.tables.delete(table);
-  registry.get(table)?.delete(ws);
-};
-var broadcastChange = (table, eventType, newRow, oldRow) => {
-  const subs = registry.get(table);
-  if (!subs?.size)
-    return;
-  const msg = JSON.stringify({ event: eventType, table, eventType, new: newRow ?? null, old: oldRow ?? null });
-  for (const ws of subs) {
-    try {
-      ws.send(msg);
-    } catch {}
+  try {
+    const sent = await smtpSend(to, subject, html);
+    if (!sent)
+      console.log(`[BusyBase] No email transport configured. Would send to ${to}: ${subject}`);
+  } catch (e) {
+    console.error(`[BusyBase] Failed to send email to ${to}:`, e);
   }
 };
-var wsHandlers = {
-  open(ws) {
-    ws.data = { tables: new Set };
-  },
-  message(ws, raw) {
-    try {
-      const msg = JSON.parse(typeof raw === "string" ? raw : raw.toString());
-      if (msg.type === "subscribe" && msg.table)
-        sub(ws, msg.table);
-      else if (msg.type === "unsubscribe" && msg.table)
-        unsub(ws, msg.table);
-    } catch {}
-  },
-  close(ws) {
-    for (const table of ws.data?.tables ?? [])
-      registry.get(table)?.delete(ws);
-  }
-};
+var sendEmail = (to, subject, html, text = "") => sendEmailOn(hooks, to, subject, html, text);
 
 // src/db.ts
 import { createClient } from "@libsql/client";
@@ -166,62 +148,151 @@ var cors = {
 var json = (data, status = 200, extra = {}) => Response.json(data, { status, headers: { ...cors, ...extra } });
 var ok = (data, status = 200, extra = {}) => json({ data, error: null }, status, extra);
 var err = (msg, code = 400, hint = "") => json({ data: null, error: { message: msg, hint, code } }, code);
-var esc = (s) => String(s).replace(/\0/g, "").replace(/'/g, "''");
+var esc = (s) => String(s).replace(/'/g, "''");
 var validId = (s) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) && s !== "_users" && s !== "_sessions";
-mkdirSync(DIR, { recursive: true });
-var db = createClient({ url: `file:${DIR}/db.sqlite` });
-var tableExists = async (name) => {
-  const r = await db.execute({ sql: "SELECT name FROM sqlite_master WHERE type='table' AND name=?", args: [name] });
+var openClient = (dir) => {
+  mkdirSync(dir, { recursive: true });
+  return createClient({ url: `file:${dir}/db.sqlite` });
+};
+var initAuthTablesFor = async (client) => {
+  await client.execute(`CREATE TABLE IF NOT EXISTS _users (
+    id TEXT, email TEXT, pw TEXT, pubkey TEXT, role TEXT,
+    meta TEXT, app_meta TEXT, created TEXT, updated TEXT, last_sign_in TEXT
+  )`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS _sessions (token TEXT, refresh TEXT, uid TEXT, exp INTEGER)`);
+};
+var tableExistsIn = async (client, name) => {
+  const r = await client.execute({ sql: "SELECT name FROM sqlite_master WHERE type='table' AND name=?", args: [name] });
   return r.rows.length > 0;
 };
-var openTbl = async (name) => await tableExists(name) ? name : null;
-var mkTbl = async (name, row) => {
+var openTblIn = async (client, name) => await tableExistsIn(client, name) ? name : null;
+var mkTblIn = async (client, name, row) => {
   const cols = Object.keys(row).map((k) => `${k} TEXT`).join(", ");
-  await db.execute(`CREATE TABLE IF NOT EXISTS ${name} (${cols})`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS ${name} (${cols})`);
   return name;
 };
-var ensureCols = async (name, row) => {
-  const info = await db.execute(`PRAGMA table_info(${name})`);
-  const existing = new Set(info.rows.map((r) => r.name));
+var getTableColumnsIn = async (client, name) => {
+  const info = await client.execute(`PRAGMA table_info(${name})`);
+  return new Set(info.rows.map((r) => r.name));
+};
+var ensureColsIn = async (client, name, row) => {
+  const existing = await getTableColumnsIn(client, name);
   for (const k of Object.keys(row)) {
     if (!existing.has(k))
-      await db.execute(`ALTER TABLE ${name} ADD COLUMN ${k} TEXT`);
+      await client.execute(`ALTER TABLE ${name} ADD COLUMN ${k} TEXT`).catch(() => {});
   }
 };
-var dbInsert = async (name, row) => {
+var tableLocksByClient = new WeakMap;
+var ensureTableIn = async (client, name, row) => {
+  let locks = tableLocksByClient.get(client);
+  if (!locks) {
+    locks = new Map;
+    tableLocksByClient.set(client, locks);
+  }
+  const prior = locks.get(name) || Promise.resolve();
+  const next = prior.then(async () => {
+    if (!await tableExistsIn(client, name))
+      await mkTblIn(client, name, row);
+    else
+      await ensureColsIn(client, name, row);
+  });
+  locks.set(name, next.catch(() => {}));
+  await next;
+};
+var toCell = (v) => v == null ? null : typeof v === "object" ? JSON.stringify(v) : String(v);
+var dbInsertIn = async (client, name, row) => {
   const keys = Object.keys(row);
   const ph = keys.map(() => "?").join(", ");
-  const vals = keys.map((k) => row[k] == null ? null : String(row[k]));
-  await db.execute({ sql: `INSERT INTO ${name} (${keys.join(", ")}) VALUES (${ph})`, args: vals });
+  const vals = keys.map((k) => toCell(row[k]));
+  await client.execute({ sql: `INSERT INTO ${name} (${keys.join(", ")}) VALUES (${ph})`, args: vals });
 };
-var getRows = async (name, where) => {
-  if (!await tableExists(name))
+var MAX_ROWS_FETCHED = 50000;
+var getRowsIn = async (client, name, where) => {
+  if (!await tableExistsIn(client, name))
     return [];
-  const r = await db.execute(`SELECT * FROM ${name} WHERE ${where}`);
+  const r = await client.execute(`SELECT * FROM ${name} WHERE ${where} LIMIT ${MAX_ROWS_FETCHED}`);
   return r.rows.map((row) => ({ ...row }));
 };
-var getAllRows = async (name) => {
-  if (!await tableExists(name))
+var getAllRowsIn = async (client, name) => {
+  if (!await tableExistsIn(client, name))
     return [];
-  const r = await db.execute(`SELECT * FROM ${name}`);
+  const r = await client.execute(`SELECT * FROM ${name} LIMIT ${MAX_ROWS_FETCHED}`);
   return r.rows.map((row) => ({ ...row }));
 };
-var dbUpdate = async (name, data, where) => {
+var dbUpdateIn = async (client, name, data, where) => {
   const keys = Object.keys(data).filter((k) => k !== "id");
   if (!keys.length)
     return;
   const sets = keys.map((k) => `${k}=?`).join(", ");
-  const vals = keys.map((k) => data[k] == null ? null : String(data[k]));
-  await db.execute({ sql: `UPDATE ${name} SET ${sets} WHERE ${where}`, args: vals });
+  const vals = keys.map((k) => toCell(data[k]));
+  await client.execute({ sql: `UPDATE ${name} SET ${sets} WHERE ${where}`, args: vals });
 };
-var dbDelete = async (name, where) => {
-  await db.execute(`DELETE FROM ${name} WHERE ${where}`);
+var dbDeleteIn = async (client, name, where) => {
+  await client.execute(`DELETE FROM ${name} WHERE ${where}`);
 };
-var tableNames = async () => {
-  const r = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
+var tableNamesIn = async (client) => {
+  const r = await client.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
   return r.rows.map((row) => row.name);
 };
 var clean = (rows) => rows.map(({ pw, pubkey: _pk, ...r }) => r);
+var makeRateLimiter = (windowMs, max) => {
+  const buckets = new Map;
+  const limited = (key) => {
+    const now = Date.now();
+    const hits = (buckets.get(key) || []).filter((t) => now - t < windowMs);
+    hits.push(now);
+    buckets.set(key, hits);
+    return hits.length > max;
+  };
+  const sweep = () => {
+    const now = Date.now();
+    for (const [k, hits] of buckets) {
+      const fresh = hits.filter((t) => now - t < windowMs);
+      if (fresh.length)
+        buckets.set(k, fresh);
+      else
+        buckets.delete(k);
+    }
+  };
+  return { limited, sweep };
+};
+var cosineDistance = (a, b) => {
+  if (a.length !== b.length || !a.length)
+    return null;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0;i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0)
+    return null;
+  return 1 - dot / (Math.sqrt(na) * Math.sqrt(nb));
+};
+var parseVector = (v) => {
+  if (typeof v !== "string" || !v)
+    return null;
+  try {
+    const arr = JSON.parse(v);
+    return Array.isArray(arr) && arr.every((n) => typeof n === "number") ? arr : null;
+  } catch {
+    return null;
+  }
+};
+var vecSearch = (rows, embedding, limit) => {
+  const scored = [];
+  for (const row of rows) {
+    const rowVec = parseVector(row.vector);
+    if (!rowVec)
+      continue;
+    const dist = cosineDistance(embedding, rowVec);
+    if (dist === null)
+      continue;
+    scored.push({ row: { ...row, _distance: dist }, dist });
+  }
+  scored.sort((x, y) => x.dist - y.dist);
+  return scored.slice(0, limit).map((s) => s.row);
+};
 var makeUser = (u) => ({
   id: u.id,
   email: u.email || null,
@@ -243,25 +314,56 @@ var makeSession = (token, refresh, exp, user) => ({
   expires_at: Math.floor(exp / 1000),
   user
 });
-var issueSession = async (uid) => {
+var hashToken = async (token) => {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Buffer.from(digest).toString("hex");
+};
+var timingSafeEqual = (a, b) => {
+  if (a.length !== b.length)
+    return false;
+  let diff = 0;
+  for (let i = 0;i < a.length; i++)
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+};
+var issueSessionIn = async (client, uid) => {
   const token = crypto.randomUUID(), refresh = crypto.randomUUID();
   const exp = Date.now() + 7 * 24 * 60 * 60 * 1000;
-  await db.execute({ sql: "INSERT INTO _sessions (token, refresh, uid, exp) VALUES (?, ?, ?, ?)", args: [token, refresh, uid, exp] });
+  const tokenHash = await hashToken(token), refreshHash = await hashToken(refresh);
+  await client.execute({ sql: "INSERT INTO _sessions (token, refresh, uid, exp) VALUES (?, ?, ?, ?)", args: [tokenHash, refreshHash, uid, exp] });
   return { token, refresh, exp };
 };
-var getUser = async (r) => {
+var findSessionByTokenIn = async (client, token) => {
+  const tokenHash = await hashToken(token);
+  const sessions = await client.execute({ sql: "SELECT * FROM _sessions WHERE token=? AND exp>?", args: [tokenHash, Date.now()] });
+  const s = sessions.rows[0];
+  if (!s || !timingSafeEqual(String(s.token), tokenHash))
+    return null;
+  return s;
+};
+var deleteSessionByTokenIn = async (client, token) => {
+  const tokenHash = await hashToken(token);
+  await client.execute({ sql: "DELETE FROM _sessions WHERE token=?", args: [tokenHash] });
+};
+var getUserFromRequestIn = async (client, r) => {
   const token = r.headers.get("Authorization")?.split(" ")[1];
   if (!token)
     return null;
-  const sessions = await db.execute({ sql: "SELECT * FROM _sessions WHERE token=? AND exp>?", args: [token, Date.now()] });
-  const s = sessions.rows[0];
+  const s = await findSessionByTokenIn(client, token);
   if (!s)
     return null;
-  const users = await getRows("_users", `id = '${esc(s.uid)}'`);
+  const users = await getRowsIn(client, "_users", `id = '${esc(s.uid)}'`);
   return users[0] ? makeUser(users[0]) : null;
 };
-var NUM_LIT = /^-?\d+(\.\d+)?$/;
-var cmp = (col, s, val) => NUM_LIT.test(val) ? `(${col} ${s} '${esc(val)}' OR ${col} ${s} CAST('${esc(val)}' AS NUMERIC))` : `${col} ${s} '${esc(val)}'`;
+var sweepExpiredIn = async (client) => {
+  await client.execute({ sql: "DELETE FROM _sessions WHERE exp < ?", args: [Date.now()] }).catch(() => {});
+};
+var cmpExpr = (col, s, v) => {
+  if ((s === ">" || s === ">=" || s === "<" || s === "<=") && v !== "" && Number.isFinite(Number(v))) {
+    return `CAST(${col} AS REAL) ${s} ${Number(v)}`;
+  }
+  return `${col} ${s} '${v}'`;
+};
 var toFilter = (p) => {
   const skip = new Set(["select", "order", "limit", "offset", "vec", "count"]);
   const parts = [];
@@ -272,7 +374,7 @@ var toFilter = (p) => {
       const col2 = k.slice(3);
       if (!validId(col2))
         continue;
-      const list = val.split(",").flatMap((v) => NUM_LIT.test(v) ? [`'${esc(v)}'`, v] : [`'${esc(v)}'`]).join(",");
+      const list = val.split(",").map((v) => `'${esc(v)}'`).join(",");
       parts.push(`${col2} IN (${list})`);
       continue;
     }
@@ -281,11 +383,11 @@ var toFilter = (p) => {
         const d1 = clause.indexOf("."), d2 = clause.indexOf(".", d1 + 1);
         if (d1 < 0 || d2 < 0)
           return null;
-        const col2 = clause.slice(0, d1), op2 = clause.slice(d1 + 1, d2), v = clause.slice(d2 + 1);
+        const col2 = clause.slice(0, d1), op2 = clause.slice(d1 + 1, d2), v = esc(clause.slice(d2 + 1));
         if (!validId(col2))
           return null;
         const s = op2 === "eq" ? "=" : op2 === "neq" ? "!=" : op2 === "gt" ? ">" : op2 === "gte" ? ">=" : op2 === "lt" ? "<" : op2 === "lte" ? "<=" : null;
-        return s ? cmp(col2, s, v) : null;
+        return s ? cmpExpr(col2, s, v) : null;
       }).filter(Boolean);
       if (orParts.length)
         parts.push(`(${orParts.join(" OR ")})`);
@@ -297,7 +399,7 @@ var toFilter = (p) => {
       if (!validId(col2))
         continue;
       const s = op2 === "eq" ? "=" : op2 === "neq" ? "!=" : op2 === "gt" ? ">" : op2 === "gte" ? ">=" : op2 === "lt" ? "<" : op2 === "lte" ? "<=" : "=";
-      parts.push(`NOT (${col2} ${s} '${esc(val)}')`);
+      parts.push(`NOT (${cmpExpr(col2, s, esc(val))})`);
       continue;
     }
     const op = k.match(/^(eq|neq|gt|gte|lt|lte|like|ilike|is)\./)?.[1];
@@ -318,24 +420,81 @@ var toFilter = (p) => {
       parts.push(`${col} IS ${upper}`);
     } else {
       const s = op === "eq" ? "=" : op === "neq" ? "!=" : op === "gt" ? ">" : op === "gte" ? ">=" : op === "lt" ? "<" : "<=";
-      parts.push(cmp(col, s, val));
+      parts.push(cmpExpr(col, s, safe));
     }
   }
   return parts.join(" AND ");
+};
+var db = openClient(DIR);
+var getAllRows = (name) => getAllRowsIn(db, name);
+var tableNames = () => tableNamesIn(db);
+
+// src/realtime.ts
+var registry = new Map;
+var sub = (ws, table) => {
+  ws.data.tables.add(table);
+  if (!registry.has(table))
+    registry.set(table, new Set);
+  registry.get(table).add(ws);
+};
+var unsub = (ws, table) => {
+  ws.data.tables.delete(table);
+  const subs = registry.get(table);
+  if (!subs)
+    return;
+  subs.delete(ws);
+  if (subs.size === 0)
+    registry.delete(table);
+};
+var broadcastChange = (table, eventType, newRow, oldRow) => {
+  const subs = registry.get(table);
+  if (!subs?.size)
+    return;
+  const msg = JSON.stringify({ event: eventType, table, eventType, new: newRow ?? null, old: oldRow ?? null });
+  for (const ws of subs) {
+    try {
+      ws.send(msg);
+    } catch (e) {
+      console.error(`[BusyBase] Realtime send failed for table "${table}":`, e);
+    }
+  }
+};
+var wsHandlers = {
+  open(ws) {
+    ws.data.tables = new Set;
+  },
+  message(ws, raw) {
+    (async () => {
+      try {
+        const msg = JSON.parse(typeof raw === "string" ? raw : raw.toString());
+        if (msg.type === "subscribe" && msg.table) {
+          if (!validId(msg.table))
+            return;
+          if (hooks.canAccess) {
+            const denied = await fireHook("canAccess", { user: ws.data.user ?? null, table: msg.table, method: "GET" });
+            if (denied)
+              return;
+          }
+          sub(ws, msg.table);
+        } else if (msg.type === "unsubscribe" && msg.table)
+          unsub(ws, msg.table);
+      } catch {}
+    })();
+  },
+  close(ws) {
+    for (const table of [...ws.data?.tables ?? []])
+      unsub(ws, table);
+  }
 };
 
 // src/auth.ts
 var nonces = new Map;
 var resetTokens = new Map;
+var authRateLimiter = makeRateLimiter(60000, 10);
+var rateLimited = authRateLimiter.limited;
 var importPubKey = (b64) => crypto.subtle.importKey("raw", Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), { name: "Ed25519" }, false, ["verify"]);
-var initAuthTables = async () => {
-  await db.execute(`CREATE TABLE IF NOT EXISTS _users (
-    id TEXT, email TEXT, pw TEXT, pubkey TEXT, role TEXT,
-    meta TEXT, app_meta TEXT, created TEXT, updated TEXT, last_sign_in TEXT
-  )`);
-  await db.execute(`CREATE TABLE IF NOT EXISTS _sessions (token TEXT, refresh TEXT, uid TEXT, exp INTEGER)`);
-};
-var sweepExpired = async () => {
+var initAuthTables = (client = db) => initAuthTablesFor(client);
+var sweepExpired = async (client = db) => {
   const now = Date.now();
   for (const [k, exp] of nonces)
     if (exp < now)
@@ -343,9 +502,14 @@ var sweepExpired = async () => {
   for (const [k, v] of resetTokens)
     if (v.exp < now)
       resetTokens.delete(k);
-  await db.execute({ sql: "DELETE FROM _sessions WHERE exp < ?", args: [now] }).catch(() => {});
+  authRateLimiter.sweep();
+  await sweepExpiredIn(client);
 };
-var handleAuth = async (action, req, B) => {
+var RATE_LIMITED_ACTIONS = new Set(["signup", "token", "recover", "keypair"]);
+var handleAuth = async (client, action, req, B, ip = "unknown") => {
+  if (RATE_LIMITED_ACTIONS.has(action) && rateLimited(`${ip}:${action}`)) {
+    return err("Too many requests, please try again later", 429);
+  }
   if (action === "keypair" && req.method === "GET") {
     const nonce = crypto.randomUUID();
     nonces.set(nonce, Date.now() + 60000);
@@ -370,21 +534,20 @@ var handleAuth = async (action, req, B) => {
     if (!valid)
       return err("Signature verification failed", 401);
     const now = new Date().toISOString();
-    let users = await getRows("_users", `pubkey = '${esc(pubkey)}'`);
+    let users = await getRowsIn(client, "_users", `pubkey = '${esc(pubkey)}'`);
     let u = users[0];
     if (!u) {
       u = { id: crypto.randomUUID(), email: "", pw: "", pubkey, role: "authenticated", meta: "{}", app_meta: "{}", created: now, updated: now, last_sign_in: now };
-      await dbInsert("_users", u);
+      await dbInsertIn(client, "_users", u);
       const hookErr = await fireHook("onSignup", makeUser(u));
       if (hookErr)
         return err(hookErr, 400);
     } else {
-      await dbUpdate("_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
+      await dbUpdateIn(client, "_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
       u = { ...u, last_sign_in: now, updated: now };
     }
-    const { token, refresh, exp: sExp } = await issueSession(u.id);
+    const { token, refresh, exp: sExp } = await issueSessionIn(client, u.id);
     const user = makeUser(u);
-    await fireHook("onIssueSession", user);
     await fireHook("onSignin", user);
     return ok({ user, session: makeSession(token, refresh, sExp, user) });
   }
@@ -392,11 +555,11 @@ var handleAuth = async (action, req, B) => {
     if (!B.email || !B.password)
       return err("Email & password required");
     const emailLower = B.email.toLowerCase();
-    if ((await getRows("_users", `email = '${esc(emailLower)}'`)).length)
+    if ((await getRowsIn(client, "_users", `email = '${esc(emailLower)}'`)).length)
       return err("User already registered", 400, "Check if user already exists");
     const now = new Date().toISOString();
     const u = { id: crypto.randomUUID(), email: emailLower, pw: await Bun.password.hash(B.password), pubkey: "", role: "authenticated", meta: JSON.stringify(B.data || {}), app_meta: "{}", created: now, updated: now, last_sign_in: now };
-    await dbInsert("_users", u);
+    await dbInsertIn(client, "_users", u);
     const signupHookErr = await fireHook("onSignup", makeUser(u));
     if (signupHookErr)
       return err(signupHookErr, 400);
@@ -404,36 +567,35 @@ var handleAuth = async (action, req, B) => {
   }
   if (action === "token") {
     const emailLower = (B.email || "").toLowerCase();
-    const users = await getRows("_users", `email = '${esc(emailLower)}'`);
+    const users = await getRowsIn(client, "_users", `email = '${esc(emailLower)}'`);
     const u = users[0];
     if (!u || !await Bun.password.verify(B.password || "", u.pw))
       return err("Invalid login credentials", 400);
     const now = new Date().toISOString();
-    await dbUpdate("_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
-    const { token, refresh, exp } = await issueSession(u.id);
+    await dbUpdateIn(client, "_users", { last_sign_in: now, updated: now }, `id = '${esc(u.id)}'`);
+    const { token, refresh, exp } = await issueSessionIn(client, u.id);
     const user = makeUser({ ...u, last_sign_in: now, updated: now });
-    await fireHook("onIssueSession", user);
     await fireHook("onSignin", user);
     return ok({ user, session: makeSession(token, refresh, exp, user) });
   }
   if (action === "user") {
-    const user = await getUser(req);
+    const user = await getUserFromRequestIn(client, req);
     if (!user)
       return err("Not authenticated", 401);
     return ok({ user });
   }
   if (action === "update") {
-    const user = await getUser(req);
+    const user = await getUserFromRequestIn(client, req);
     if (!user)
       return err("Not authenticated", 401);
-    const existing = await getRows("_users", `id = '${esc(user.id)}'`);
+    const existing = await getRowsIn(client, "_users", `id = '${esc(user.id)}'`);
     const u = existing[0];
     if (!u)
       return err("User not found", 404);
     const now = new Date().toISOString();
     const newEmail = B.email ? B.email.toLowerCase() : u.email;
     if (B.email && newEmail !== u.email) {
-      const taken = await getRows("_users", `email = '${esc(newEmail)}'`);
+      const taken = await getRowsIn(client, "_users", `email = '${esc(newEmail)}'`);
       if (taken.length)
         return err("Email already in use", 400);
       const emailHookErr = await fireHook("onEmailChange", makeUser(u), newEmail);
@@ -441,24 +603,20 @@ var handleAuth = async (action, req, B) => {
         return err(emailHookErr, 400);
     }
     const merged = { email: newEmail, pw: B.password ? await Bun.password.hash(B.password) : u.pw, meta: JSON.stringify({ ...JSON.parse(u.meta || "{}"), ...B.data || {} }), app_meta: JSON.stringify({ ...JSON.parse(u.app_meta || "{}"), ...B.app_metadata || {} }), updated: now };
-    await dbUpdate("_users", merged, `id = '${esc(u.id)}'`);
-    await fireHook("onUserUpdate", makeUser({ ...u, ...merged }), { email: B.email, password: !!B.password, data: B.data, app_metadata: B.app_metadata });
+    await dbUpdateIn(client, "_users", merged, `id = '${esc(u.id)}'`);
     return ok({ user: makeUser({ ...u, ...merged }) });
   }
   if (action === "logout") {
-    const user = await getUser(req);
     const token = req.headers.get("Authorization")?.split(" ")[1];
     if (token)
-      await dbDelete("_sessions", `token = '${esc(token)}'`).catch(() => {});
-    if (user)
-      await fireHook("onSignout", user);
+      await deleteSessionByTokenIn(client, token).catch(() => {});
     return ok({});
   }
   if (action === "recover") {
     const email = (B.email || "").toLowerCase();
     if (!email)
       return err("Email required");
-    const users = await getRows("_users", `email = '${esc(email)}'`);
+    const users = await getRowsIn(client, "_users", `email = '${esc(email)}'`);
     if (users[0]) {
       const resetToken = crypto.randomUUID();
       resetTokens.set(resetToken, { uid: users[0].id, exp: Date.now() + 60 * 60000 });
@@ -467,6 +625,8 @@ var handleAuth = async (action, req, B) => {
         const siteUrl = process.env.BUSYBASE_URL || `http://localhost:${process.env.BUSYBASE_PORT || 54321}`;
         await sendEmail(email, "Reset your password", `<p>Click <a href="${siteUrl}/auth/v1/verify?token=${resetToken}&type=recovery">here</a> to reset your password. This link expires in 1 hour.</p>`);
       }
+    } else {
+      await hashToken(crypto.randomUUID());
     }
     return ok({});
   }
@@ -481,26 +641,31 @@ var handleAuth = async (action, req, B) => {
       if (!password)
         return err("New password required");
       resetTokens.delete(token);
-      const users = await getRows("_users", `id = '${esc(entry.uid)}'`);
+      const users = await getRowsIn(client, "_users", `id = '${esc(entry.uid)}'`);
       const u = users[0];
       if (!u)
         return err("User not found", 404);
       const now = new Date().toISOString();
-      await dbUpdate("_users", { pw: await Bun.password.hash(password), updated: now }, `id = '${esc(u.id)}'`);
-      const { token: access, refresh, exp } = await issueSession(u.id);
+      await dbUpdateIn(client, "_users", { pw: await Bun.password.hash(password), updated: now }, `id = '${esc(u.id)}'`);
+      const { token: access, refresh, exp } = await issueSessionIn(client, u.id);
       return ok({ user: makeUser({ ...u, updated: now }), session: makeSession(access, refresh, exp, makeUser({ ...u, updated: now })) });
     }
     return err("Invalid verification type", 400);
   }
   return null;
 };
+var handleAuthDefault = (action, req, B, ip = "unknown") => handleAuth(db, action, req, B, ip);
 
 // src/rest.ts
-var handleRest = async (table, req, P, B) => {
+var restRateLimiter = makeRateLimiter(60000, 300);
+var handleRest = async (client, table, req, P, B, broadcast = broadcastChange, ip = "unknown") => {
   if (!validId(table))
     return err("Invalid table name");
+  const isMutating = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE";
+  if (isMutating && restRateLimiter.limited(ip))
+    return err("Too many requests, please try again later", 429);
   if (hooks.canAccess) {
-    const reqUser = await getUser(req).catch(() => null);
+    const reqUser = await getUserFromRequestIn(client, req).catch(() => null);
     const denied = await fireHook("canAccess", { user: reqUser, table, method: req.method });
     if (denied)
       return err(denied, 403);
@@ -510,23 +675,55 @@ var handleRest = async (table, req, P, B) => {
   if (req.method === "GET") {
     const paramsHooked = await pipeHook("beforeSelect", P, table);
     const filter = toFilter(paramsHooked);
-    let rows = filter ? await getRows(table, filter) : await getAllRows(table);
+    let rows = filter ? await getRowsIn(client, table, filter) : await getAllRowsIn(client, table);
     rows = await pipeHook("afterSelect", rows, table);
-    if (P.select && P.select !== "*") {
-      const cols = P.select.split(",").filter((c) => validId(c));
-      rows = rows.map((r) => Object.fromEntries(cols.map((c) => [c, r[c]])));
+    let isVecSearch = false;
+    if (paramsHooked.vec) {
+      let embedding;
+      try {
+        embedding = JSON.parse(paramsHooked.vec);
+      } catch {
+        return err("Invalid vec: must be a JSON array of numbers");
+      }
+      if (!Array.isArray(embedding) || !embedding.every((n) => typeof n === "number"))
+        return err("Invalid vec: must be a JSON array of numbers");
+      isVecSearch = true;
+      rows = vecSearch(rows, embedding, Math.max(0, parseInt(paramsHooked.limit) || 10));
     }
-    if (P.order) {
-      const [col, dir] = P.order.split(".");
-      if (validId(col))
-        rows.sort((a, b) => dir === "desc" ? b[col] > a[col] ? 1 : -1 : a[col] > b[col] ? 1 : -1);
+    let knownCols = rows.length ? new Set(Object.keys(rows[0])) : null;
+    if (!knownCols && (paramsHooked.select && paramsHooked.select !== "*" || paramsHooked.order) && await tableExistsIn(client, table)) {
+      knownCols = await getTableColumnsIn(client, table);
     }
-    const limit = Math.max(0, parseInt(P.limit) || 1000);
-    const offset = Math.max(0, parseInt(P.offset) || 0);
+    if (paramsHooked.select && paramsHooked.select !== "*") {
+      const requested = paramsHooked.select.split(",");
+      const invalidSyntax = requested.filter((c) => !validId(c) && c !== "_distance");
+      if (invalidSyntax.length)
+        return err(`Invalid column name in select: ${invalidSyntax.join(", ")}`);
+      const unknown = knownCols ? requested.filter((c) => !knownCols.has(c) && c !== "_distance") : [];
+      if (unknown.length)
+        return err(`Unknown column in select: ${unknown.join(", ")}`);
+      rows = rows.map((r) => Object.fromEntries(requested.map((c) => [c, r[c]])));
+    }
+    if (paramsHooked.order) {
+      const [col, dir] = paramsHooked.order.split(".");
+      if (!validId(col) && col !== "_distance")
+        return err(`Invalid column name in order: ${col}`);
+      if (knownCols && !knownCols.has(col) && col !== "_distance")
+        return err(`Unknown column in order: ${col}`);
+      const numCmp = (x, y) => {
+        const nx = Number(x), ny = Number(y);
+        if (x !== "" && x != null && y !== "" && y != null && Number.isFinite(nx) && Number.isFinite(ny))
+          return nx - ny;
+        return x > y ? 1 : x < y ? -1 : 0;
+      };
+      rows.sort((a, b) => dir === "desc" ? numCmp(b[col], a[col]) : numCmp(a[col], b[col]));
+    }
+    const limit = isVecSearch ? rows.length : Math.max(0, parseInt(paramsHooked.limit) || 1000);
+    const offset = isVecSearch ? 0 : Math.max(0, parseInt(paramsHooked.offset) || 0);
     const page = clean(rows).slice(offset, offset + limit);
     const rangeEnd = page.length ? offset + page.length - 1 : 0;
     const extra = {};
-    if (P.count === "exact" || prefer.includes("count=exact")) {
+    if (paramsHooked.count === "exact" || prefer.includes("count=exact")) {
       extra["Content-Range"] = page.length ? `${offset}-${rangeEnd}/${rows.length}` : `*`;
       return Response.json({ data: page, error: null, count: rows.length }, { status: 200, headers: { ...cors, ...extra } });
     }
@@ -543,15 +740,11 @@ var handleRest = async (table, req, P, B) => {
     if (preErr)
       return err(preErr, 400);
     rows = await pipeHook("afterInsert", rows.map((r) => ({ id: r.id ?? crypto.randomUUID(), ...r })), table);
-    const tExists = await openTbl(table);
-    if (!tExists)
-      await mkTbl(table, rows[0]);
-    else
-      await ensureCols(table, rows[0]);
+    await ensureTableIn(client, table, rows[0]);
     for (const row of rows)
-      await dbInsert(table, row);
+      await dbInsertIn(client, table, row);
     for (const row of clean(rows))
-      broadcastChange(table, "INSERT", row, null);
+      broadcast(table, "INSERT", row, null);
     if (returnMinimal)
       return new Response(null, { status: 204, headers: cors });
     return ok(clean(rows), 201);
@@ -560,22 +753,22 @@ var handleRest = async (table, req, P, B) => {
     const filter = toFilter(P);
     if (!filter)
       return err("No filter provided");
-    if (!await openTbl(table))
+    if (!await openTblIn(client, table))
       return err("Table not found", 404);
-    const data = Array.isArray(B) ? B[0] : B;
-    if (Object.keys(data).some((k) => !validId(k)))
-      return err("Invalid column name");
-    let existing = await getRows(table, filter);
+    if (Array.isArray(B))
+      return err("Array body not supported for PUT/PATCH; update rows individually or by id");
+    const data = B;
+    let existing = await getRowsIn(client, table, filter);
     if (!existing.length)
       return ok([]);
     const preErr = await fireHook("beforeUpdate", table, existing, data);
     if (preErr)
       return err(preErr, 400);
-    await dbUpdate(table, data, filter);
+    await dbUpdateIn(client, table, data, filter);
     let updated = existing.map((r) => ({ ...r, ...data }));
     updated = await pipeHook("afterUpdate", updated, table);
     for (let i = 0;i < updated.length; i++)
-      broadcastChange(table, "UPDATE", clean([updated[i]])[0], clean([existing[i]])[0]);
+      broadcast(table, "UPDATE", clean([updated[i]])[0], clean([existing[i]])[0]);
     if (returnMinimal)
       return new Response(null, { status: 204, headers: cors });
     return ok(clean(updated));
@@ -584,91 +777,154 @@ var handleRest = async (table, req, P, B) => {
     const filter = toFilter(P);
     if (!filter)
       return err("No filter provided");
-    if (!await openTbl(table))
+    if (!await openTblIn(client, table))
       return err("Table not found", 404);
-    const toDelete = await getRows(table, filter);
+    const toDelete = await getRowsIn(client, table, filter);
     const preErr = await fireHook("beforeDelete", table, toDelete);
     if (preErr)
       return err(preErr, 400);
-    await dbDelete(table, filter);
+    await dbDeleteIn(client, table, filter);
     await fireHook("afterDelete", table, toDelete);
     for (const row of clean(toDelete))
-      broadcastChange(table, "DELETE", null, row);
+      broadcast(table, "DELETE", null, row);
     if (returnMinimal)
       return new Response(null, { status: 204, headers: cors });
     return ok([]);
   }
   return err("Method not allowed", 405);
 };
+var handleRestDefault = (table, req, P, B, ip = "unknown") => handleRest(db, table, req, P, B, broadcastChange, ip);
 
 // src/server.ts
 var PORT = process.env.BUSYBASE_PORT || 54321;
+var HOST = process.env.BUSYBASE_HOST || "127.0.0.1";
 var UNIX_SOCKET = process.env.BUSYBASE_UNIX_SOCKET || null;
+var STUDIO_TOKEN = process.env.BUSYBASE_STUDIO_TOKEN;
+var MAX_REQUEST_BODY_SIZE = parseInt(process.env.BUSYBASE_MAX_BODY_SIZE || "") || 10 * 1024 * 1024;
+if (!process.env.BUSYBASE_CORS_ORIGIN && false) {}
 await initAuthTables();
-setInterval(sweepExpired, 5 * 60000).unref();
-var mime = { ".js": "text/javascript", ".html": "text/html", ".css": "text/css" };
+setInterval(() => sweepExpired(), 5 * 60000).unref();
+setInterval(() => restRateLimiter.sweep(), 5 * 60000).unref();
+var mime = {
+  ".js": "text/javascript",
+  ".html": "text/html",
+  ".css": "text/css"
+};
 var ext = (p) => p.slice(p.lastIndexOf(".")) || "";
-var server = Bun.serve({ ...UNIX_SOCKET ? { unix: UNIX_SOCKET } : { port: PORT }, websocket: wsHandlers, fetch: async (req) => {
-  if (req.headers.get("upgrade") === "websocket" && new URL(req.url).pathname === "/realtime/v1/websocket") {
-    const upgraded = server.upgrade(req, { data: { tables: new Set } });
-    return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
-  }
-  if (req.method === "OPTIONS")
-    return new Response(null, { status: 204, headers: cors });
-  if (hooks.onRequest) {
-    const r = await hooks.onRequest(req);
-    if (r)
-      return r;
-  }
-  const { pathname, searchParams } = new URL(req.url);
-  const P = Object.fromEntries(searchParams);
-  const hasBody = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE";
-  const B = hasBody ? await req.json().catch(() => ({})) : {};
-  if (pathname.startsWith("/auth/v1/")) {
-    const action = pathname.split("/")[3];
-    const result = await handleAuth(action, req, B);
-    return result ?? err("Not found", 404);
-  }
-  if (pathname.startsWith("/rest/v1/")) {
-    const table = pathname.slice(9).split("/").map(decodeURIComponent).filter(Boolean)[0];
-    if (!table)
-      return err("Table required");
-    return handleRest(table, req, P, B);
-  }
-  if (pathname === "/studio/config") {
-    const data = { BUSYBASE_DIR: process.env.BUSYBASE_DIR || "busybase_data", BUSYBASE_PORT: String(PORT), BUSYBASE_CORS_ORIGIN: process.env.BUSYBASE_CORS_ORIGIN || "*" };
-    return Response.json({ data, error: null }, { headers: cors });
-  }
-  if (pathname === "/studio/api/tables") {
-    const data = await tableNames();
-    return Response.json({ data, error: null }, { headers: cors });
-  }
-  if (pathname === "/studio/api/users") {
-    const rows = await getAllRows("_users");
-    return Response.json({ data: clean(rows), error: null }, { headers: cors });
-  }
-  if (pathname === "/studio" || pathname === "/studio/") {
-    const file = Bun.file(new URL("../studio/index.html", import.meta.url));
-    if (await file.exists())
-      return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
-    return err("Studio not found", 404);
-  }
-  if (pathname.startsWith("/studio/")) {
-    const name = pathname.slice(8);
-    if (name && !name.includes("..")) {
-      const file = Bun.file(new URL(`../studio/${name}`, import.meta.url));
+var studioAuthorized = (req, searchParams) => {
+  if (!STUDIO_TOKEN)
+    return true;
+  const bearer = req.headers.get("Authorization")?.split(" ")[1];
+  const qtoken = searchParams.get("token");
+  return bearer === STUDIO_TOKEN || qtoken === STUDIO_TOKEN;
+};
+var server = Bun.serve({
+  ...UNIX_SOCKET ? { unix: UNIX_SOCKET } : { hostname: HOST, port: PORT },
+  maxRequestBodySize: MAX_REQUEST_BODY_SIZE,
+  websocket: wsHandlers,
+  fetch: async (req) => {
+    if (req.headers.get("upgrade") === "websocket" && new URL(req.url).pathname === "/realtime/v1/websocket") {
+      const wsToken = req.headers.get("Authorization")?.split(" ")[1] || new URL(req.url).searchParams.get("token");
+      const wsUser = wsToken ? await getUserFromRequestIn(db, new Request(req.url, { headers: { Authorization: `Bearer ${wsToken}` } })).catch(() => null) : null;
+      const upgraded = server.upgrade(req, { data: { tables: new Set, user: wsUser } });
+      return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
+    }
+    if (req.method === "OPTIONS")
+      return new Response(null, { status: 204, headers: cors });
+    const { pathname, searchParams } = new URL(req.url);
+    if (pathname === "/healthz")
+      return Response.json({ status: "ok" }, { headers: cors });
+    if (hooks.onRequest) {
+      const r = await hooks.onRequest(req);
+      if (r)
+        return r;
+    }
+    const P = Object.fromEntries(searchParams);
+    const hasBody = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE";
+    const B = hasBody ? await req.json().catch(() => ({})) : {};
+    if (pathname.startsWith("/auth/v1/")) {
+      const action = pathname.split("/")[3];
+      const ip = server.requestIP(req)?.address || "unknown";
+      const result = await handleAuthDefault(action, req, B, ip);
+      return result ?? err("Not found", 404);
+    }
+    if (pathname.startsWith("/rest/v1/")) {
+      const table = pathname.slice(9).split("/").map(decodeURIComponent).filter(Boolean)[0];
+      if (!table)
+        return err("Table required");
+      const ip = server.requestIP(req)?.address || "unknown";
+      return handleRestDefault(table, req, P, B, ip);
+    }
+    if (pathname === "/studio" || pathname === "/studio/" || pathname.startsWith("/studio/")) {
+      if (!studioAuthorized(req, searchParams))
+        return err("Studio access requires a valid token", 401);
+    }
+    if (pathname === "/studio/config") {
+      const data = {
+        BUSYBASE_DIR: process.env.BUSYBASE_DIR || "busybase_data",
+        BUSYBASE_PORT: String(PORT),
+        BUSYBASE_CORS_ORIGIN: process.env.BUSYBASE_CORS_ORIGIN || "*"
+      };
+      return Response.json({ data, error: null }, { headers: cors });
+    }
+    if (pathname === "/studio/api/tables") {
+      const data = await tableNames();
+      return Response.json({ data, error: null }, { headers: cors });
+    }
+    if (pathname === "/studio/api/users") {
+      const rows = await getAllRows("_users");
+      return Response.json({ data: clean(rows), error: null }, { headers: cors });
+    }
+    if (pathname === "/studio") {
+      const redirectUrl = new URL(req.url);
+      redirectUrl.pathname = "/studio/";
+      return new Response(null, {
+        status: 301,
+        headers: { Location: redirectUrl.pathname + redirectUrl.search, ...cors }
+      });
+    }
+    if (pathname === "/studio/") {
+      const file = Bun.file(new URL("../studio/index.html", import.meta.url));
       if (await file.exists())
-        return new Response(file, { headers: { "Content-Type": mime[ext(name)] || "application/octet-stream", ...cors } });
+        return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
+      return err("Studio not found", 404);
+    }
+    if (pathname.startsWith("/studio/")) {
+      const name = pathname.slice(8);
+      if (name && !name.includes("..")) {
+        const file = Bun.file(new URL(`../studio/${name}`, import.meta.url));
+        if (await file.exists())
+          return new Response(file, {
+            headers: { "Content-Type": mime[ext(name)] || "application/octet-stream", ...cors }
+          });
+      }
+      return err("Not found", 404);
+    }
+    const staticRoutes = {
+      "/": "./gui.html",
+      "/gui": "./gui.html",
+      "/docs": "../docs/docs.html",
+      "/site": "../docs/index.html"
+    };
+    if (pathname in staticRoutes) {
+      const file = Bun.file(new URL(staticRoutes[pathname], import.meta.url));
+      if (await file.exists())
+        return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
+      return err("Not found", 404);
     }
     return err("Not found", 404);
   }
-  const staticRoutes = { "/": "./gui.html", "/gui": "./gui.html", "/docs": "../docs/docs.html", "/site": "../docs/index.html" };
-  if (pathname in staticRoutes) {
-    const file = Bun.file(new URL(staticRoutes[pathname], import.meta.url));
-    if (await file.exists())
-      return new Response(file, { headers: { "Content-Type": "text/html", ...cors } });
-    return err("Not found", 404);
-  }
-  return err("Not found", 404);
-} });
-console.log(UNIX_SOCKET ? `BusyBase: unix socket ${UNIX_SOCKET}` : `BusyBase: http://localhost:${PORT}  |  Studio: http://localhost:${PORT}/studio`);
+});
+console.log(`BusyBase: http://localhost:${PORT}  |  Studio: http://localhost:${PORT}/studio`);
+var shuttingDown = false;
+var shutdown = (signal) => {
+  if (shuttingDown)
+    return;
+  shuttingDown = true;
+  console.log(`[BusyBase] Received ${signal}, shutting down gracefully...`);
+  server.stop();
+  db.close();
+  process.exit(0);
+};
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
