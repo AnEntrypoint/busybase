@@ -54,7 +54,7 @@ jobs:
       - name: Build standalone
         run: bun build src/cli.ts --compile --target=${{ matrix.target }} --outfile=${{ matrix.artifact }}
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
@@ -65,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
