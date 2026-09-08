@@ -12,7 +12,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -33,9 +33,9 @@ jobs:
       - run: bun build src/hooks.ts --target=bun --outfile=src/hooks.js --external @libsql/client
       - run: bun build src/realtime.ts --target=bun --outfile=src/realtime.js --external @libsql/client
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - run: npm publish --access public
