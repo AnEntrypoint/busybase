@@ -5,6 +5,7 @@ import { initAuthTables, sweepExpired, handleAuth } from "./auth.ts";
 import { handleRest } from "./rest.ts";
 
 const PORT = process.env.BUSYBASE_PORT || 54321;
+const HOST = process.env.BUSYBASE_HOST || "127.0.0.1";
 // BUSYBASE_UNIX_SOCKET (optional): when set, Bun.serve listens on this Unix
 // domain socket path instead of a TCP port -- no network-visible port at
 // all, matching Bun's own `unix` Bun.serve option (a caller's fetch() also
@@ -20,7 +21,7 @@ setInterval(sweepExpired, 5 * 60_000).unref();
 const mime: Record<string, string> = { ".js": "text/javascript", ".html": "text/html", ".css": "text/css" };
 const ext = (p: string) => p.slice(p.lastIndexOf(".")) || "";
 
-const server = Bun.serve({ ...(UNIX_SOCKET ? { unix: UNIX_SOCKET } : { port: PORT }), websocket: wsHandlers, fetch: async (req) => {
+const server = Bun.serve({ ...(UNIX_SOCKET ? { unix: UNIX_SOCKET } : { hostname: HOST, port: PORT }), websocket: wsHandlers, fetch: async (req) => {
   if (req.headers.get("upgrade") === "websocket" && new URL(req.url).pathname === "/realtime/v1/websocket") {
     const upgraded = server.upgrade(req, { data: { tables: new Set() } });
     return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 });
@@ -33,6 +34,8 @@ const server = Bun.serve({ ...(UNIX_SOCKET ? { unix: UNIX_SOCKET } : { port: POR
   const P = Object.fromEntries(searchParams);
   const hasBody = req.method === "POST" || req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE";
   const B = hasBody ? await req.json().catch(() => ({})) : {};
+
+  if (pathname === "/healthz") return Response.json({ status: "ok" }, { headers: cors });
 
   if (pathname.startsWith("/auth/v1/")) {
     const action = pathname.split("/")[3];
@@ -88,4 +91,4 @@ const server = Bun.serve({ ...(UNIX_SOCKET ? { unix: UNIX_SOCKET } : { port: POR
 
 console.log(UNIX_SOCKET
   ? `BusyBase: unix socket ${UNIX_SOCKET}`
-  : `BusyBase: http://localhost:${PORT}  |  Studio: http://localhost:${PORT}/studio`);
+  : `BusyBase: http://${HOST}:${PORT}  |  Studio: http://${HOST}:${PORT}/studio`);
