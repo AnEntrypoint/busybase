@@ -46,6 +46,16 @@ No sentinel rows needed — SQLite schema is defined by CREATE TABLE, not by dat
 ## Hooks
 Return `{ error: string }` from any hook to abort the operation. Return a transformed value from `pipeHook` hooks (`beforeSelect`, `afterSelect`, `beforeInsert`, `afterInsert`, `beforeUpdate`, `afterUpdate`). Hook file loaded once at startup via `BUSYBASE_HOOKS`.
 
+## GM Integration (optional embedding generation)
+
+`import { embedText, embedBatch } from 'busybase/embed'` generates real embeddings (`BAAI/bge-small-en-v1.5`, 384-dim, L2-normalized) via gm's shared `bert` WASM plugin, instead of requiring callers to pre-compute vectors before calling `.vec()`/inserting into a `vector` column. There is no dedicated REST endpoint for this — it's meant to be called from a `BUSYBASE_HOOKS` file's `beforeInsert`/`beforeUpdate` hook, setting `row.vector = await embedText(row.content)` before the row is written.
+
+This is genuinely optional and fails soft, never hard: if gm isn't installed (`~/.gm-tools/agentplug-runner[.exe]` absent), if this project's `.gm/exec-spool` hasn't been picked up by the shared daemon yet, or if the request doesn't land within `timeoutMs` (default 30s for `embedText`, 60s for `embedBatch`), both functions resolve to `null` rather than throwing or hanging the request. A hook that wants embeddings to be mandatory should check for `null` itself and return `{ error }`.
+
+Dispatch goes through the same file-based exec-spool protocol gm's own tooling uses (`src/embed.ts`): write `.gm/exec-spool/in/bert/<task>.txt` atomically (temp file + rename), poll `.gm/exec-spool/out/bert-<task>.json`. The first call from a given project directory also spawns/registers `agentplug-runner spool` there if the binary is present but the daemon hasn't seen this project yet (mirrors `gm-mcp`'s `ensureSpoolRunnerRunning`) — expect a multi-second cold-start on that first call while the daemon picks up the registration and loads the model.
+
+Because `bert` is one of gm's `STATELESS_SHARED_PLUGIN_NAMES`, registering gets this for free: every project registered with the same daemon shares one machine-wide, concurrency-capped embedding pool, so a burst of embed calls from busybase is naturally rate-limited against whatever else is running on the machine through gm, rather than each project contending independently.
+
 ## Embedded Mode
 `import { createEmbedded } from 'busybase/embedded'` — returns a client with the same interface as the HTTP SDK but running in-process using libSQL in local file mode. Used by zellous for zero-config local deployment.
 
