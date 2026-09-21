@@ -34,7 +34,7 @@ export const handleRest = async (client: Client, table: string, req: Request, P:
       try { embedding = JSON.parse(paramsHooked.vec); } catch { return err("Invalid vec: must be a JSON array of numbers"); }
       if (!Array.isArray(embedding) || !embedding.every(n => typeof n === "number")) return err("Invalid vec: must be a JSON array of numbers");
       isVecSearch = true;
-      rows = vecSearch(rows, embedding, Math.max(0, parseInt(paramsHooked.limit) || 10));
+      rows = await vecSearch(client, rows, embedding, Math.max(0, parseInt(paramsHooked.limit) || 10));
     }
 
     let knownCols = rows.length ? new Set(Object.keys(rows[0])) : null;

@@ -160,17 +160,24 @@ export const parseVector = (v: unknown): number[] | null => {
   } catch { return null; }
 };
 
-export const vecSearch = (rows: any[], embedding: number[], limit: number): any[] => {
-  const scored: Array<{ row: any; dist: number }> = [];
+// Rows with no vector or a length-mismatched vector are excluded before
+// reaching SQL, never coerced or silently dropped by the database: libsql's
+// vector_distance_cos throws for the whole query on a single length
+// mismatch (verified live), so a stray bad row would abort every row's
+// score, not just its own.
+export const vecSearch = async (client: Client, rows: any[], embedding: number[], limit: number): Promise<any[]> => {
+  const candidates: Array<{ row: any; vec: number[] }> = [];
   for (const row of rows) {
     const rowVec = parseVector(row.vector);
-    if (!rowVec) continue;
-    const dist = cosineDistance(embedding, rowVec);
-    if (dist === null) continue;
-    scored.push({ row: { ...row, _distance: dist }, dist });
+    if (!rowVec || rowVec.length !== embedding.length || !embedding.length) continue;
+    candidates.push({ row, vec: rowVec });
   }
-  scored.sort((x, y) => x.dist - y.dist);
-  return scored.slice(0, limit).map(s => s.row);
+  if (!candidates.length) return [];
+  const r = await client.execute({
+    sql: "SELECT key, vector_distance_cos(vector32(value), vector32(?)) as dist FROM json_each(?) ORDER BY dist LIMIT ?",
+    args: [JSON.stringify(embedding), JSON.stringify(candidates.map(c => JSON.stringify(c.vec))), limit],
+  });
+  return r.rows.map((row: any) => ({ ...candidates[row.key as number].row, _distance: row.dist as number }));
 };
 
 export const makeUser = (u: any) => ({
